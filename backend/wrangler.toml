@@ -1,0 +1,19 @@
+name = "sentinel-backend"
+main = "src/index.ts"
+compatibility_date = "2024-06-01"
+
+[vars]
+JWT_EXPIRES_IN = "24h"
+CORS_ORIGINS = "http://localhost:5173,https://sentinel.example.com"
+
+[[d1_databases]]
+binding = "SENTINEL_DB"
+database_name = "sentinel-db"
+database_id = "YOUR_D1_DATABASE_ID_HERE"
+
+[[r2_buckets]]
+binding = "SENTINEL_R2"
+bucket_name = "sentinel-r2"
+
+# Secrets (set via wrangler secret put):
+# JWT_SECRET
