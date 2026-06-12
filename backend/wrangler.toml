@@ -9,7 +9,7 @@ CORS_ORIGINS = "http://localhost:5173,https://sentinel.example.com"
 [[d1_databases]]
 binding = "SENTINEL_DB"
 database_name = "sentinel-db"
-database_id = "YOUR_D1_DATABASE_ID_HERE"
+database_id = "37661af7-7c1b-4f19-a58c-fa5c452c2c28"
 
 [[r2_buckets]]
 binding = "SENTINEL_R2"
