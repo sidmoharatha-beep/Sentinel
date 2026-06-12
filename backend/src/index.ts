@@ -18,7 +18,7 @@ app.use(logger());
 app.use(
   cors({
     origin: (origin) => {
-      const allowed = (globalThis as any).CORS_ORIGINS?.split(',') ?? ['http://localhost:5173'];
+      const allowed = ['http://localhost:5173','https://d46a861a.sentinel-frontend-2m3.pages.dev'];
       if (!origin || allowed.includes(origin)) return origin;
       return null;
     },

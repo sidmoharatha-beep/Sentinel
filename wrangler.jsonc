@@ -1,14 +1,1 @@
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "sentinel",
-  "compatibility_date": "2026-06-12",
-  "observability": {
-    "enabled": true
-  },
-  "assets": {
-    "directory": "sentinel-frontend"
-  },
-  "compatibility_flags": [
-    "nodejs_compat"
-  ]
-}
+{"account_id": "ceb6fbd242afb11df2af1fd87c68ae80"}
