@@ -42,3 +42,7 @@ Thumbs.db
 # Misc
 *.pem
 *.cert
+
+.dev.vars*
+!.dev.vars.example
+!.env.example
