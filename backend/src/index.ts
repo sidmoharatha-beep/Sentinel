@@ -49,14 +49,24 @@ app.get('/api/health', (c) =>
 
 // Serve static frontend files
 app.get('/*', async (c) => {
-  const path = c.req.path;
   try {
-    // Try to serve the requested file from the dist folder
-    const file = await c.env.ASSETS?.fetch(c.req.raw) || new Response('Not Found', { status: 404 });
-    return file;
+    // Try to serve the requested file from ASSETS binding
+    const assetResponse = await c.env.ASSETS.fetch(c.req.raw);
+    if (assetResponse.status !== 404) {
+      return assetResponse;
+    }
   } catch {
-    // If file not found, serve index.html for SPA routing
-    return c.env.ASSETS?.fetch(new Request(new URL('/index.html', c.req.url))) || c.text('Not Found', 404);
+    // Asset not found, fall through to index.html
+  }
+  
+  // For SPA routing: serve index.html for all non-API, non-asset routes
+  try {
+    const indexResponse = await c.env.ASSETS.fetch(
+      new Request(new URL('/index.html', c.req.url))
+    );
+    return indexResponse;
+  } catch {
+    return c.text('Not Found', 404);
   }
 });
 
