@@ -17,5 +17,6 @@ bucket_name = "sentinel-r2"
 # Secrets (set via wrangler secret put):
 # JWT_SECRET
 
-[site]
-bucket = "./dist"
+[assets]
+directory = "../sentinel-frontend/dist"
+binding = "ASSETS"

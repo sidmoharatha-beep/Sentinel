@@ -49,12 +49,11 @@ app.get('/api/health', (c) =>
 
 // Serve static frontend files
 app.get('/*', async (c) => {
-  // Try ASSETS binding first (newer Workers Sites), then __STATIC_CONTENT (legacy)
-  const assets = c.env.ASSETS || c.env.__STATIC_CONTENT;
+  const assets = c.env.ASSETS;
   if (!assets) {
     return c.text('Static assets not configured', 500);
   }
-  
+
   try {
     // Try to serve the requested file
     const assetResponse = await assets.fetch(c.req.raw);
@@ -64,7 +63,7 @@ app.get('/*', async (c) => {
   } catch {
     // Asset not found, fall through to index.html
   }
-  
+
   // For SPA routing: serve index.html for all non-API, non-asset routes
   try {
     const indexResponse = await assets.fetch(
