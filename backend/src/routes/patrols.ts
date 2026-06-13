@@ -172,7 +172,7 @@ if (!effectiveGuardId || !site_id || !shift || !scheduled_start || !scheduled_en
 
   const guard = await c.env.SENTINEL_DB
     .prepare("SELECT id, role FROM users WHERE id = ? AND is_active = 1")
-    .bind(Number(guard_id))
+    .bind(Number(effectiveGuardId))
     .first<{ id: number; role: string }>();
   if (!guard) throw new HTTPException(404, { message: 'Guard not found or inactive' });
 
