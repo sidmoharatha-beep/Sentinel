@@ -162,6 +162,7 @@ app.get('/:id', async (c) => {
 
 // ─── POST / ───────────────────────────────────────────────────────────────
 app.post('/', requireRole('system_admin', 'security_manager', 'security_supervisor', 'security_guard'), async (c) => {
+  const user = c.get('user') as User;
   const body = await c.req.json<Record<string, any>>();
   const { route_id, guard_id, site_id, shift, scheduled_start, scheduled_end, notes } = body;
   const effectiveGuardId = guard_id || user.id;
