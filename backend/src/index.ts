@@ -47,6 +47,19 @@ app.get('/api/health', (c) =>
   c.json({ status: 'ok', timestamp: new Date().toISOString(), version: '3.0.0' })
 );
 
+// Serve static frontend files
+app.get('/*', async (c) => {
+  const path = c.req.path;
+  try {
+    // Try to serve the requested file from the dist folder
+    const file = await c.env.ASSETS?.fetch(c.req.raw) || new Response('Not Found', { status: 404 });
+    return file;
+  } catch {
+    // If file not found, serve index.html for SPA routing
+    return c.env.ASSETS?.fetch(new Request(new URL('/index.html', c.req.url))) || c.text('Not Found', 404);
+  }
+});
+
 app.notFound((c) => c.json({ error: 'Endpoint not found' }, 404));
 
 app.onError((err, c) => {

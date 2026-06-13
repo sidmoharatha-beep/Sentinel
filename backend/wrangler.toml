@@ -5,7 +5,6 @@ compatibility_date = "2024-06-01"
 [vars]
 JWT_EXPIRES_IN = "24h"
 
-
 [[d1_databases]]
 binding = "SENTINEL_DB"
 database_name = "sentinel-db"
@@ -17,3 +16,6 @@ bucket_name = "sentinel-r2"
 
 # Secrets (set via wrangler secret put):
 # JWT_SECRET
+
+[site]
+bucket = "./dist"

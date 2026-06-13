@@ -1,6 +1,7 @@
 export interface Env {
   SENTINEL_DB: D1Database;
   SENTINEL_R2: R2Bucket;
+  ASSETS: Fetcher;
   JWT_SECRET: string;
   JWT_EXPIRES_IN: string;
   CORS_ORIGINS: string;
