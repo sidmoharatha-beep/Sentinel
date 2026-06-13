@@ -5,7 +5,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { api } from '@/lib/api';
 import {
   Users, Shield, Info, Loader2, AlertCircle,
-  RefreshCw, CheckCircle2, Building2,
+  RefreshCw, CheckCircle2, Building2, Pencil, Trash2, KeyRound, X, Save,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -14,12 +14,6 @@ const ROLE_LABELS: Record<string, string> = {
   security_manager:    'Security Manager',
   security_supervisor: 'Supervisor',
   security_guard:      'Guard',
-};
-
-const SHIFT_COLORS: Record<string, string> = {
-  A: 'bg-green-100 text-green-700 border-green-200',
-  B: 'bg-blue-100 text-blue-700 border-blue-200',
-  C: 'bg-purple-100 text-purple-700 border-purple-200',
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -41,12 +35,41 @@ interface UserRecord {
   created_at: string;
 }
 
+type ModalType = 'edit' | 'reset_password' | 'delete' | 'add' | null;
+
+interface ModalState {
+  type: ModalType;
+  user: UserRecord | null;
+}
+
 export default function Settings() {
   const { user, isRole } = useAuth();
-  const [users, setUsers]     = useState<UserRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const [tab, setTab]         = useState<'users' | 'system'>('users');
+  const [users, setUsers]         = useState<UserRecord[]>([]);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+  const [success, setSuccess]     = useState('');
+  const [tab, setTab]             = useState<'users' | 'system'>('users');
+  const [modal, setModal]         = useState<ModalState>({ type: null, user: null });
+  const [saving, setSaving]       = useState(false);
+
+  // Edit form state
+  const [editName, setEditName]   = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editRole, setEditRole]   = useState('');
+
+  // Add user form state
+  const [addEmpId, setAddEmpId]     = useState('');
+  const [addUsername, setAddUsername] = useState('');
+  const [addName, setAddName]       = useState('');
+  const [addEmail, setAddEmail]     = useState('');
+  const [addPhone, setAddPhone]     = useState('');
+  const [addRole, setAddRole]       = useState('security_guard');
+  const [addPassword, setAddPassword] = useState('');
+
+  // Reset password state
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const loadUsers = useCallback(() => {
     if (!isRole('system_admin', 'security_manager', 'security_supervisor')) return;
@@ -59,6 +82,112 @@ export default function Settings() {
   }, [isRole]);
 
   useEffect(() => { if (tab === 'users') loadUsers(); }, [tab, loadUsers]);
+
+  function openEdit(u: UserRecord) {
+    setEditName(u.full_name);
+    setEditEmail(u.email);
+    setEditPhone(u.phone || '');
+    setEditRole(u.role);
+    setModal({ type: 'edit', user: u });
+    setError(''); setSuccess('');
+  }
+
+  function openResetPassword(u: UserRecord) {
+    setNewPassword(''); setConfirmPassword('');
+    setModal({ type: 'reset_password', user: u });
+    setError(''); setSuccess('');
+  }
+
+  function openDelete(u: UserRecord) {
+    setModal({ type: 'delete', user: u });
+    setError(''); setSuccess('');
+  }
+
+  function openAdd() {
+    setAddEmpId(''); setAddUsername(''); setAddName('');
+    setAddEmail(''); setAddPhone(''); setAddRole('security_guard'); setAddPassword('');
+    setModal({ type: 'add', user: null });
+    setError(''); setSuccess('');
+  }
+
+  function closeModal() {
+    setModal({ type: null, user: null });
+    setError(''); setSuccess('');
+  }
+
+  function showSuccess(msg: string) {
+    setSuccess(msg);
+    setTimeout(() => setSuccess(''), 3000);
+  }
+
+  async function handleEdit() {
+    if (!modal.user) return;
+    if (!editName.trim()) { setError('Name is required'); return; }
+    setSaving(true); setError('');
+    try {
+      await api.patch(`/auth/users/${modal.user.id}`, {
+        full_name: editName.trim(),
+        email: editEmail.trim(),
+        phone: editPhone.trim() || null,
+        role: editRole,
+      });
+      setUsers(prev => prev.map(u => u.id === modal.user!.id
+        ? { ...u, full_name: editName.trim(), email: editEmail.trim(), phone: editPhone.trim() || null, role: editRole }
+        : u
+      ));
+      closeModal();
+      showSuccess(`${editName} updated successfully`);
+    } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function handleResetPassword() {
+    if (!modal.user) return;
+    if (!newPassword) { setError('Password is required'); return; }
+    if (newPassword.length < 6) { setError('Password must be at least 6 characters'); return; }
+    if (newPassword !== confirmPassword) { setError('Passwords do not match'); return; }
+    setSaving(true); setError('');
+    try {
+      await api.patch(`/auth/users/${modal.user.id}`, { password: newPassword });
+      closeModal();
+      showSuccess(`Password reset for ${modal.user.full_name}`);
+    } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete() {
+    if (!modal.user) return;
+    setSaving(true); setError('');
+    try {
+      await api.delete(`/auth/users/${modal.user.id}`);
+      setUsers(prev => prev.filter(u => u.id !== modal.user!.id));
+      closeModal();
+      showSuccess(`${modal.user.full_name} deleted successfully`);
+    } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function handleAdd() {
+    if (!addEmpId || !addUsername || !addName || !addEmail || !addPassword) {
+      setError('All fields except phone are required'); return;
+    }
+    setSaving(true); setError('');
+    try {
+      const res: any = await api.post('/auth/users', {
+        employee_id: addEmpId.trim(),
+        username: addUsername.trim(),
+        full_name: addName.trim(),
+        email: addEmail.trim(),
+        phone: addPhone.trim() || null,
+        role: addRole,
+        password: addPassword,
+      });
+      setUsers(prev => [...prev, res.user]);
+      closeModal();
+      showSuccess(`${addName} added successfully`);
+    } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
+  }
 
   async function toggleActive(u: UserRecord) {
     if (!isRole('system_admin')) return;
@@ -81,6 +210,13 @@ export default function Settings() {
         <p className="text-text-muted text-sm">System configuration and user management.</p>
       </header>
 
+      {/* Success toast */}
+      {success && (
+        <div className="flex items-center gap-2 p-3 mb-4 rounded-lg bg-success/10 text-success text-sm">
+          <CheckCircle2 size={14} /> {success}
+        </div>
+      )}
+
       {/* My Profile */}
       <Card className="mb-6">
         <h3 className="text-sm font-semibold text-primary mb-4 flex items-center gap-2">
@@ -97,18 +233,13 @@ export default function Settings() {
               <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', ROLE_COLORS[user?.role || ''])}>
                 {ROLE_LABELS[user?.role || '']}
               </span>
-              {user?.shift && (
-                <span className={cn('text-xs px-2 py-0.5 rounded-full border font-semibold', SHIFT_COLORS[user.shift])}>
-                  Shift {user.shift}
-                </span>
-              )}
             </div>
             <p className="text-xs text-text-muted mt-1">{user?.email}</p>
           </div>
         </div>
       </Card>
 
-      {/* Tabs — only for admins/managers/supervisors */}
+      {/* Tabs */}
       {isRole('system_admin', 'security_manager', 'security_supervisor') && (
         <>
           <div className="flex gap-1 mb-4 border-b border-border">
@@ -133,12 +264,20 @@ export default function Settings() {
                 <h3 className="text-sm font-semibold text-primary flex items-center gap-2">
                   <Users size={15} /> Users ({users.length})
                 </h3>
-                <button onClick={loadUsers} className="p-2 rounded-lg border border-border hover:bg-surface-alt transition-colors text-text-muted">
-                  <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-                </button>
+                <div className="flex gap-2">
+                  {isRole('system_admin') && (
+                    <button onClick={openAdd}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors">
+                      + Add User
+                    </button>
+                  )}
+                  <button onClick={loadUsers} className="p-2 rounded-lg border border-border hover:bg-surface-alt transition-colors text-text-muted">
+                    <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                  </button>
+                </div>
               </div>
 
-              {error && (
+              {error && !modal.type && (
                 <div className="flex items-center gap-2 p-3 mb-4 rounded-lg bg-danger/10 text-danger text-sm">
                   <AlertCircle size={14} /> {error}
                 </div>
@@ -155,10 +294,9 @@ export default function Settings() {
                       <tr className="border-b border-border">
                         <th className="text-left py-2 px-3 text-xs font-semibold text-text-muted uppercase tracking-wide">Employee</th>
                         <th className="text-left py-2 px-3 text-xs font-semibold text-text-muted uppercase tracking-wide">Role</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-text-muted uppercase tracking-wide">Shift</th>
                         <th className="text-left py-2 px-3 text-xs font-semibold text-text-muted uppercase tracking-wide">Status</th>
                         {isRole('system_admin') && (
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-text-muted uppercase tracking-wide">Action</th>
+                          <th className="text-left py-2 px-3 text-xs font-semibold text-text-muted uppercase tracking-wide">Actions</th>
                         )}
                       </tr>
                     </thead>
@@ -175,15 +313,6 @@ export default function Settings() {
                             </span>
                           </td>
                           <td className="py-3 px-3">
-                            {u.shift ? (
-                              <span className={cn('text-xs px-2 py-0.5 rounded-full border font-semibold', SHIFT_COLORS[u.shift])}>
-                                Shift {u.shift}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-text-muted">—</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3">
                             {u.is_active ? (
                               <span className="flex items-center gap-1 text-xs text-success">
                                 <CheckCircle2 size={12} /> Active
@@ -194,18 +323,39 @@ export default function Settings() {
                           </td>
                           {isRole('system_admin') && (
                             <td className="py-3 px-3">
-                              {u.id !== user?.id && (
-                                <button
-                                  onClick={() => toggleActive(u)}
-                                  className={cn('text-xs px-2.5 py-1 rounded-md border transition-colors',
-                                    u.is_active
-                                      ? 'border-danger/40 text-danger hover:bg-danger/10'
-                                      : 'border-success/40 text-success hover:bg-success/10'
-                                  )}
-                                >
-                                  {u.is_active ? 'Deactivate' : 'Activate'}
+                              <div className="flex items-center gap-1 flex-wrap">
+                                {/* Edit */}
+                                <button onClick={() => openEdit(u)}
+                                  title="Edit"
+                                  className="p-1.5 rounded-md border border-border hover:bg-surface-alt text-text-muted hover:text-primary transition-colors">
+                                  <Pencil size={13} />
                                 </button>
-                              )}
+                                {/* Reset Password */}
+                                <button onClick={() => openResetPassword(u)}
+                                  title="Reset Password"
+                                  className="p-1.5 rounded-md border border-border hover:bg-surface-alt text-text-muted hover:text-accent transition-colors">
+                                  <KeyRound size={13} />
+                                </button>
+                                {/* Activate/Deactivate */}
+                                {u.id !== user?.id && (
+                                  <button onClick={() => toggleActive(u)}
+                                    className={cn('text-xs px-2 py-1 rounded-md border transition-colors',
+                                      u.is_active
+                                        ? 'border-danger/40 text-danger hover:bg-danger/10'
+                                        : 'border-success/40 text-success hover:bg-success/10'
+                                    )}>
+                                    {u.is_active ? 'Deactivate' : 'Activate'}
+                                  </button>
+                                )}
+                                {/* Delete */}
+                                {u.id !== user?.id && (
+                                  <button onClick={() => openDelete(u)}
+                                    title="Delete"
+                                    className="p-1.5 rounded-md border border-danger/30 hover:bg-danger/10 text-danger transition-colors">
+                                    <Trash2 size={13} />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           )}
                         </tr>
@@ -219,7 +369,6 @@ export default function Settings() {
 
           {tab === 'system' && (
             <div className="space-y-4">
-              {/* Shift config info */}
               <Card>
                 <h3 className="text-sm font-semibold text-primary mb-4 flex items-center gap-2">
                   <Building2 size={15} /> Shift Configuration
@@ -234,7 +383,6 @@ export default function Settings() {
                 </div>
               </Card>
 
-              {/* Patrol frequency */}
               <Card>
                 <h3 className="text-sm font-semibold text-primary mb-4">Patrol Frequency by Area Type</h3>
                 <div className="space-y-3">
@@ -254,17 +402,16 @@ export default function Settings() {
                 </div>
               </Card>
 
-              {/* System info */}
               <Card>
                 <h3 className="text-sm font-semibold text-primary mb-4 flex items-center gap-2">
                   <Info size={15} /> System Information
                 </h3>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   {[
-                    ['Version', 'Sentinel v2.0'],
-                    ['Site', 'HPCL Visakh Refinery'],
+                    ['Version', 'Sentinel v3.0'],
+                    ['Site', 'ITC, Khordha'],
                     ['Total Checkpoints', '17'],
-                    ['Backend', 'Node.js + Express + SQLite'],
+                    ['Backend', 'Hono + Cloudflare Workers'],
                     ['Auth', 'JWT · Employee ID login'],
                     ['Audit Trail', 'Enabled'],
                   ].map(([k, v]) => (
@@ -278,6 +425,169 @@ export default function Settings() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── MODALS ── */}
+      {modal.type && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+
+            {/* EDIT MODAL */}
+            {modal.type === 'edit' && modal.user && (
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-5">
+                  <h3 className="text-base font-semibold text-primary flex items-center gap-2"><Pencil size={15}/> Edit User</h3>
+                  <button onClick={closeModal} className="p-1 rounded-md hover:bg-surface-alt text-text-muted"><X size={16}/></button>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Full Name *</label>
+                    <input value={editName} onChange={e => setEditName(e.target.value)}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Email</label>
+                    <input value={editEmail} onChange={e => setEditEmail(e.target.value)} type="email"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Phone</label>
+                    <input value={editPhone} onChange={e => setEditPhone(e.target.value)}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Role</label>
+                    <select value={editRole} onChange={e => setEditRole(e.target.value)}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30">
+                      {Object.entries(ROLE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  </div>
+                  {error && <p className="text-xs text-danger flex items-center gap-1"><AlertCircle size={12}/>{error}</p>}
+                </div>
+                <div className="flex gap-2 mt-5">
+                  <button onClick={closeModal} className="flex-1 px-4 py-2 text-sm border border-border rounded-lg hover:bg-surface-alt transition-colors">Cancel</button>
+                  <button onClick={handleEdit} disabled={saving}
+                    className="flex-1 px-4 py-2 text-sm bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+                    {saving ? <Loader2 size={14} className="animate-spin"/> : <Save size={14}/>} Save
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* RESET PASSWORD MODAL */}
+            {modal.type === 'reset_password' && modal.user && (
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-5">
+                  <h3 className="text-base font-semibold text-primary flex items-center gap-2"><KeyRound size={15}/> Reset Password</h3>
+                  <button onClick={closeModal} className="p-1 rounded-md hover:bg-surface-alt text-text-muted"><X size={16}/></button>
+                </div>
+                <p className="text-sm text-text-muted mb-4">Resetting password for <strong className="text-primary">{modal.user.full_name}</strong></p>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">New Password *</label>
+                    <input value={newPassword} onChange={e => setNewPassword(e.target.value)} type="password"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Confirm Password *</label>
+                    <input value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} type="password"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  {error && <p className="text-xs text-danger flex items-center gap-1"><AlertCircle size={12}/>{error}</p>}
+                </div>
+                <div className="flex gap-2 mt-5">
+                  <button onClick={closeModal} className="flex-1 px-4 py-2 text-sm border border-border rounded-lg hover:bg-surface-alt transition-colors">Cancel</button>
+                  <button onClick={handleResetPassword} disabled={saving}
+                    className="flex-1 px-4 py-2 text-sm bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+                    {saving ? <Loader2 size={14} className="animate-spin"/> : <KeyRound size={14}/>} Reset
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* DELETE MODAL */}
+            {modal.type === 'delete' && modal.user && (
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-5">
+                  <h3 className="text-base font-semibold text-danger flex items-center gap-2"><Trash2 size={15}/> Delete User</h3>
+                  <button onClick={closeModal} className="p-1 rounded-md hover:bg-surface-alt text-text-muted"><X size={16}/></button>
+                </div>
+                <p className="text-sm text-text-muted mb-2">Are you sure you want to permanently delete:</p>
+                <p className="text-sm font-semibold text-primary mb-1">{modal.user.full_name}</p>
+                <p className="text-xs text-text-muted font-mono mb-4">{modal.user.employee_id}</p>
+                <p className="text-xs text-danger bg-danger/10 rounded-lg p-3">This action cannot be undone. All patrol records for this user will remain but the account will be removed.</p>
+                {error && <p className="text-xs text-danger mt-2 flex items-center gap-1"><AlertCircle size={12}/>{error}</p>}
+                <div className="flex gap-2 mt-5">
+                  <button onClick={closeModal} className="flex-1 px-4 py-2 text-sm border border-border rounded-lg hover:bg-surface-alt transition-colors">Cancel</button>
+                  <button onClick={handleDelete} disabled={saving}
+                    className="flex-1 px-4 py-2 text-sm bg-danger text-white rounded-lg hover:bg-danger/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+                    {saving ? <Loader2 size={14} className="animate-spin"/> : <Trash2 size={14}/>} Delete
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ADD USER MODAL */}
+            {modal.type === 'add' && (
+              <div className="p-6 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between mb-5">
+                  <h3 className="text-base font-semibold text-primary flex items-center gap-2"><Users size={15}/> Add New User</h3>
+                  <button onClick={closeModal} className="p-1 rounded-md hover:bg-surface-alt text-text-muted"><X size={16}/></button>
+                </div>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-text-muted block mb-1">Employee ID *</label>
+                      <input value={addEmpId} onChange={e => setAddEmpId(e.target.value)} placeholder="EMP011"
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-text-muted block mb-1">Username *</label>
+                      <input value={addUsername} onChange={e => setAddUsername(e.target.value)} placeholder="guard011"
+                        className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Full Name *</label>
+                    <input value={addName} onChange={e => setAddName(e.target.value)} placeholder="Full Name"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Email *</label>
+                    <input value={addEmail} onChange={e => setAddEmail(e.target.value)} type="email" placeholder="email@itc.com"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Phone</label>
+                    <input value={addPhone} onChange={e => setAddPhone(e.target.value)} placeholder="+91 9876543210"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Role *</label>
+                    <select value={addRole} onChange={e => setAddRole(e.target.value)}
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30">
+                      {Object.entries(ROLE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1">Password *</label>
+                    <input value={addPassword} onChange={e => setAddPassword(e.target.value)} type="password" placeholder="Min 6 characters"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  </div>
+                  {error && <p className="text-xs text-danger flex items-center gap-1"><AlertCircle size={12}/>{error}</p>}
+                </div>
+                <div className="flex gap-2 mt-5">
+                  <button onClick={closeModal} className="flex-1 px-4 py-2 text-sm border border-border rounded-lg hover:bg-surface-alt transition-colors">Cancel</button>
+                  <button onClick={handleAdd} disabled={saving}
+                    className="flex-1 px-4 py-2 text-sm bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+                    {saving ? <Loader2 size={14} className="animate-spin"/> : <Save size={14}/>} Add User
+                  </button>
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
       )}
     </Layout>
   );

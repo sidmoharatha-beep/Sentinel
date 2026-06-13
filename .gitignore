@@ -43,6 +43,11 @@ Thumbs.db
 *.pem
 *.cert
 
+# PowerShell scripts
+*.ps1
+
+# Workspace / worktrees
+.worktrees/
+
+# Dev vars
 .dev.vars*
-!.dev.vars.example
-!.env.example

@@ -112,21 +112,10 @@ export default function Login() {
               )}
             </button>
           </form>
-
-          {/* Demo credentials hint */}
-          <div className="mt-6 pt-5 border-t border-border">
-            <p className="text-xs text-text-muted font-medium mb-2">Demo credentials:</p>
-            <div className="space-y-1 text-xs text-text-muted font-mono">
-              <div className="flex justify-between"><span>Admin:</span><span>EMP001 / admin123</span></div>
-              <div className="flex justify-between"><span>Manager:</span><span>EMP002 / manager123</span></div>
-              <div className="flex justify-between"><span>Supervisor:</span><span>EMP003 / super123</span></div>
-              <div className="flex justify-between"><span>Guard:</span><span>EMP006 / guard123</span></div>
-            </div>
-          </div>
         </div>
 
         <p className="text-center text-white/40 text-xs mt-6">
-          HPCL Visakh Refinery — Sentinel v2.0
+          ITC Limited, Khordha — Sentinel v3.0
         </p>
       </div>
     </div>

@@ -184,6 +184,7 @@ app.patch('/users/:id', requireRole('system_admin'), async (c) => {
   if (body.role !== undefined) { fields.push('role = ?'); values.push(body.role); }
   if (body.phone !== undefined) { fields.push('phone = ?'); values.push(body.phone); }
   if (body.shift !== undefined) { fields.push('shift = ?'); values.push(body.shift); }
+  if (body.password !== undefined) { fields.push('password_hash = ?'); values.push(hashPassword(body.password)); }
   if (body.is_active !== undefined) { fields.push('is_active = ?'); values.push(body.is_active ? 1 : 0); }
   fields.push('updated_at = CURRENT_TIMESTAMP');
   values.push(id);
