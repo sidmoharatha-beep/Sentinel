@@ -161,10 +161,11 @@ app.get('/:id', async (c) => {
 });
 
 // ─── POST / ───────────────────────────────────────────────────────────────
-app.post('/', requireRole('system_admin', 'security_manager', 'security_supervisor'), async (c) => {
+app.post('/', requireRole('system_admin', 'security_manager', 'security_supervisor', 'security_guard'), async (c) => {
   const body = await c.req.json<Record<string, any>>();
   const { route_id, guard_id, site_id, shift, scheduled_start, scheduled_end, notes } = body;
-  if (!guard_id || !site_id || !shift || !scheduled_start || !scheduled_end) {
+  const effectiveGuardId = guard_id || user.id;
+if (!effectiveGuardId || !site_id || !shift || !scheduled_start || !scheduled_end) {
     throw new HTTPException(400, { message: 'Missing required fields' });
   }
 
@@ -180,7 +181,7 @@ app.post('/', requireRole('system_admin', 'security_manager', 'security_supervis
   const result = await c.env.SENTINEL_DB
     .prepare(`INSERT INTO patrols (route_id, guard_id, site_id, shift, status, scheduled_start, scheduled_end, notes)
               VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?)`)
-    .bind(route_id ? Number(route_id) : null, Number(guard_id), Number(site_id), shift, scheduled_start, scheduled_end, notes ?? null)
+    .bind(route_id ? Number(route_id) : null, Number(effectiveGuardId), Number(site_id), shift, scheduled_start, scheduled_end, notes ?? null)
     .run<{ lastRowId: number }>();
 
   const patrolId = result.meta?.last_row_id ?? (result as any).lastRowId;
@@ -270,6 +271,17 @@ app.post('/:id/complete', requireRole('system_admin', 'security_supervisor', 'se
   if (!patrol) throw new HTTPException(404, { message: 'Patrol not found' });
   if (patrol.status === 'completed') throw new HTTPException(400, { message: 'Patrol already completed' });
   if (user.role === 'security_guard' && patrol.guard_id !== user.id) throw new HTTPException(403, { message: 'You can only complete your own patrol' });
+
+  // ─── BUG FIX: Prevent completion if checkpoints remain ───
+  const pendingCheck = await c.env.SENTINEL_DB
+    .prepare(`SELECT COUNT(*) as pending_count FROM patrol_checkpoints WHERE patrol_id = ? AND status = 'pending'`)
+    .bind(id)
+    .first<{ pending_count: number }>();
+
+  const pending = pendingCheck?.pending_count ?? 0;
+  if (pending > 0) {
+    throw new HTTPException(400, { message: `Cannot complete patrol. ${pending} checkpoint(s) not yet scanned.` });
+  }
 
   await c.env.SENTINEL_DB
     .prepare("UPDATE patrols SET status = 'completed', actual_end = CURRENT_TIMESTAMP WHERE id = ?")
