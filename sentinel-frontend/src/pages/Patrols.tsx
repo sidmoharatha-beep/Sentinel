@@ -86,6 +86,30 @@ const SHIFT_COLOR: Record<string, string> = {
   C: 'bg-purple-100 text-purple-700',
 };
 
+// ── QrCard: generates a real scannable QR image ───────────────────────────
+function QrCard({ cp }: { cp: Checkpoint }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (!cp.qr_code || !canvasRef.current) return;
+    import('qrcode').then(QRCode => {
+      QRCode.toCanvas(canvasRef.current!, cp.qr_code, {
+        width: 140, margin: 1,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+    });
+  }, [cp.qr_code]);
+  return (
+    <div className="border border-border rounded-xl p-3 text-center hover:shadow-md transition-shadow">
+      <div className="flex justify-center mb-2">
+        <canvas ref={canvasRef} className="rounded"/>
+      </div>
+      <p className="text-xs font-bold text-primary">{cp.name}</p>
+      <p className="text-xs text-text-muted font-mono mt-0.5">{cp.qr_code}</p>
+      <p className="text-xs text-text-muted mt-0.5">{cp.latitude.toFixed(4)}, {cp.longitude.toFixed(4)}</p>
+    </div>
+  );
+}
+
 export default function Patrols() {
   const { user, isRole } = useAuth();
 
@@ -196,15 +220,27 @@ export default function Patrols() {
     finally { setStarting(false); }
   }
 
-  // ── Open scan modal (starts at QR step) ───────────────────────────────
+  // ── Open scan modal (GPS first, then QR) ──────────────────────────────
   function openScanModal(cp: PatrolCheckpoint) {
     setScanModal(cp);
-    setScanStep('qr');
+    setScanStep('gps');
     setScanNote(''); setScanIncident(''); setShowIncident(false);
-    setGpsState('idle'); setGpsCoords(null); setGpsDistance(null);
+    setGpsState('checking'); setGpsCoords(null); setGpsDistance(null);
     setQrError('');
     setChecklistItems([]); setChecklistAnswers({});
     setPhotoDataUrl(null); setPhotoBlob(null); setPhotoError('');
+    // Start GPS check immediately on open
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const lat = pos.coords.latitude, lon = pos.coords.longitude;
+        setGpsCoords({ lat, lon });
+        const dist = distanceM(lat, lon, cp.latitude, cp.longitude);
+        setGpsDistance(Math.round(dist));
+        setGpsState(dist <= 20 ? 'ok' : 'far');
+      },
+      () => setGpsState('error'),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   }
 
   function closeScanModal() {
@@ -269,17 +305,16 @@ export default function Patrols() {
     setLoadingChecklist(true);
     try {
       const d: any = await patrolApi.qrLookup(scannedCode);
-      setChecklistItems(d.checklist_items || []);
+      setChecklistItems(d.checkpoint?.checklist_items || []);
     } catch {
       setChecklistItems([]);
     } finally { setLoadingChecklist(false); }
-    // Move to GPS step
-    goToGps(scanModal);
+    // Move to checklist step (GPS already verified)
+    setScanStep('checklist');
   }
 
-  // ── GPS ───────────────────────────────────────────────────────────────
+  // ── GPS (retry only) ──────────────────────────────────────────────────
   function goToGps(cp: PatrolCheckpoint) {
-    setScanStep('gps');
     setGpsState('checking');
     navigator.geolocation.getCurrentPosition(
       pos => {
@@ -287,7 +322,7 @@ export default function Patrols() {
         setGpsCoords({ lat, lon });
         const dist = distanceM(lat, lon, cp.latitude, cp.longitude);
         setGpsDistance(Math.round(dist));
-        setGpsState(dist <= 100 ? 'ok' : 'far');
+        setGpsState(dist <= 20 ? 'ok' : 'far');
       },
       () => setGpsState('error'),
       { enableHighAccuracy: true, timeout: 10000 }
@@ -655,8 +690,8 @@ export default function Patrols() {
             <div className="p-4 border-b border-border flex items-center justify-between shrink-0">
               <div>
                 <p className="text-xs text-text-muted font-medium uppercase tracking-wide">
-                  {scanStep === 'qr' ? 'Step 1 / 5 · Scan QR' :
-                   scanStep === 'gps' ? 'Step 2 / 5 · Verify Location' :
+                  {scanStep === 'gps' ? 'Step 1 / 5 · Verify Location' :
+                   scanStep === 'qr' ? 'Step 2 / 5 · Scan QR Code' :
                    scanStep === 'checklist' ? 'Step 3 / 5 · Checklist' :
                    scanStep === 'photo' ? 'Step 4 / 5 · Capture Photo' :
                    'Step 5 / 5 · Review & Submit'}
@@ -668,10 +703,10 @@ export default function Patrols() {
 
             {/* Step progress dots */}
             <div className="flex gap-1.5 px-4 py-2 shrink-0">
-              {(['qr','gps','checklist','photo','review'] as const).map((s, i) => (
+              {(['gps','qr','checklist','photo','review'] as const).map((s, i) => (
                 <div key={s} className={cn('h-1 rounded-full flex-1 transition-all',
                   s === scanStep ? 'bg-accent' :
-                  ['qr','gps','checklist','photo','review'].indexOf(scanStep) > i ? 'bg-green-400' : 'bg-gray-200'
+                  ['gps','qr','checklist','photo','review'].indexOf(scanStep) > i ? 'bg-green-400' : 'bg-gray-200'
                 )}/>
               ))}
             </div>
@@ -732,16 +767,16 @@ export default function Patrols() {
                     {gpsState === 'far' && (<>
                       <Navigation size={32} className="mx-auto mb-2 text-red-500"/>
                       <p className="text-sm font-bold text-red-700">Too Far Away</p>
-                      <p className="text-xs text-red-600 mt-1">You are {gpsDistance}m away. Must be within 100m.</p>
+                      <p className="text-xs text-red-600 mt-1">You are {gpsDistance}m away. Must be within 20m.</p>
                       {gpsCoords && <p className="text-xs text-red-500 mt-1">Your GPS: {gpsCoords.lat.toFixed(5)}, {gpsCoords.lon.toFixed(5)}</p>}
                       <button onClick={() => goToGps(scanModal)} className="mt-2 text-xs text-red-600 underline">Try again</button>
                     </>)}
                     {gpsState === 'error' && (<><AlertCircle size={32} className="mx-auto mb-2 text-orange-500"/><p className="text-sm font-bold text-orange-700">GPS Error</p><p className="text-xs text-orange-600 mt-1">Enable location access and retry.</p><button onClick={() => goToGps(scanModal)} className="mt-2 text-xs text-orange-600 underline">Retry</button></>)}
                   </div>
                   {gpsState === 'ok' && (
-                    <button onClick={() => setScanStep('checklist')}
+                    <button onClick={() => setScanStep('qr')}
                       className="w-full py-3 bg-accent text-white rounded-xl text-sm font-medium flex items-center justify-center gap-2">
-                      Next: Checklist →
+                      <QrCode size={15}/> Next: Scan QR Code →
                     </button>
                   )}
                 </div>
@@ -979,21 +1014,12 @@ export default function Patrols() {
                   <p className="text-xs text-text-muted mb-4">Print these QR codes and place them at each checkpoint. Guards must be within 20 meters to scan.</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                     {allCheckpoints.map(cp => (
-                      <div key={cp.id} className="border border-border rounded-xl p-3 text-center hover:shadow-md transition-shadow">
-                        <div className="flex justify-center mb-2">
-                          <div className="w-20 h-20 bg-gray-50 rounded-lg flex items-center justify-center">
-                            <QrCode size={40} className="text-gray-400"/>
-                          </div>
-                        </div>
-                        <p className="text-xs font-bold text-primary">{cp.name}</p>
-                        <p className="text-xs text-text-muted font-mono">{cp.qr_code}</p>
-                        <p className="text-xs text-text-muted mt-1">{cp.latitude.toFixed(4)}, {cp.longitude.toFixed(4)}</p>
-                      </div>
+                      <QrCard key={cp.id} cp={cp}/>
                     ))}
                   </div>
                   <div className="mt-4 p-3 rounded-xl bg-blue-50 border border-blue-200">
                     <p className="text-xs text-blue-700 font-medium">📋 How to use:</p>
-                    <p className="text-xs text-blue-600 mt-1">1. Print this page (Ctrl+P)<br/>2. Cut out each QR code<br/>3. Laminate and place at each checkpoint location<br/>4. Guards tap "Scan" button when within 100m</p>
+                    <p className="text-xs text-blue-600 mt-1">1. Print this page (Ctrl+P)<br/>2. Cut out each QR code<br/>3. Laminate and place at each checkpoint location<br/>4. Guards tap "Scan" button when within 20m</p>
                   </div>
                 </>
               )}
