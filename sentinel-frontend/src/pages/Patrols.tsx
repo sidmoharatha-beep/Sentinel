@@ -383,28 +383,25 @@ export default function Patrols() {
   async function onQrDetected(scannedCode: string) {
     stopQrCamera();
     if (!scanModal) return;
+    if (scannedCode !== scanModal.qr_code) {
+      setQrError(`Wrong QR — expected "${scanModal.qr_code}" but got "${scannedCode}". Try again.`);
+      return;
+    }
     setQrError('');
+    // ── Load checklist for this checkpoint ──
+    await loadChecklist(scanModal.qr_code);
+    setScanStep('checklist');
+  }
+
+  // Separate function so it can also be called when manually bypassing QR
+  async function loadChecklist(qrCode: string) {
     setLoadingChecklist(true);
     try {
-      // Verify QR via DB lookup - this also loads the checklist
-      const d: any = await patrolApi.qrLookup(scannedCode);
-      if (!d.checkpoint) {
-        setQrError(`QR code not recognised. Please scan the correct checkpoint QR.`);
-        setLoadingChecklist(false);
-        return;
-      }
-      // Verify it matches the checkpoint we're trying to scan
-      if (d.checkpoint.checkpoint_code !== scanModal.checkpoint_code &&
-          d.checkpoint.id !== scanModal.checkpoint_id) {
-        setQrError(`Wrong checkpoint QR. You scanned "${d.checkpoint.name}" but this is "${scanModal.checkpoint_name}". Try again.`);
-        setLoadingChecklist(false);
-        return;
-      }
+      const d: any = await patrolApi.qrLookup(qrCode);
       const items: ChecklistItem[] = d.checkpoint?.checklist_items || [];
       setChecklistItems(items);
-      setScanStep('checklist');
     } catch {
-      setQrError('QR verification failed. Please try again.');
+      setChecklistItems([]);
     } finally {
       setLoadingChecklist(false);
     }
@@ -506,19 +503,9 @@ export default function Patrols() {
     if (!scanModal || !activePatrol) return;
     if (!photoBlob) { showToast('Photo is required before submitting', 'err'); return; }
     setSubmitting(true);
-    let photo_url = '';
     try {
       setUploadingPhoto(true);
-      try {
-        const photoResult = await patrolApi.uploadPhoto(activePatrol.id, scanModal.checkpoint_id, photoBlob);
-        photo_url = photoResult.photo_url;
-      } catch (photoErr: any) {
-        // Photo upload failed - show specific error, don't proceed
-        showToast(`Photo upload failed: ${photoErr.message}`, 'err');
-        setSubmitting(false);
-        setUploadingPhoto(false);
-        return;
-      }
+      const photoResult = await patrolApi.uploadPhoto(activePatrol.id, scanModal.checkpoint_id, photoBlob);
       setUploadingPhoto(false);
 
       const checklist_responses = checklistItems.map(item => ({
@@ -535,7 +522,7 @@ export default function Patrols() {
         notes: combinedNotes,
         latitude: gpsCoords?.lat,
         longitude: gpsCoords?.lon,
-        photo_url: photo_url,
+        photo_url: photoResult.photo_url,
         checklist_responses,
       });
 
@@ -990,12 +977,7 @@ export default function Patrols() {
                   <button
                     onClick={async () => {
                       stopQrCamera();
-                      setLoadingChecklist(true);
-                      try {
-                        const d: any = await patrolApi.qrLookup(scanModal.qr_code);
-                        setChecklistItems(d.checkpoint?.checklist_items || []);
-                      } catch { setChecklistItems([]); }
-                      finally { setLoadingChecklist(false); }
+                      await loadChecklist(scanModal.qr_code);
                       setScanStep('checklist');
                     }}
                     className="w-full py-2 text-xs text-text-muted border border-dashed border-border rounded-xl hover:bg-surface-alt">
@@ -1286,7 +1268,7 @@ export default function Patrols() {
                 </div>
               ) : (
                 <>
-                  <p className="text-xs text-text-muted mb-4">Print and place at each checkpoint. Guards scan when within 150m.</p>
+                  <p className="text-xs text-text-muted mb-4">Print and place at each checkpoint. Guards scan when within 20m.</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                     {allCheckpoints.map(cp => <QrCard key={cp.id} cp={cp} />)}
                   </div>

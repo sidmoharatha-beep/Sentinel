@@ -432,8 +432,7 @@ app.post('/:id/photo', requireRole('system_admin', 'security_supervisor', 'secur
 
 // ─── GET /photo/:key+ ─────────────────────────────────────────────────────
 app.get('/photo/*', async (c) => {
-  // c.req.path inside sub-router is relative, e.g. /photo/patrols/8/...
-  const key = c.req.path.replace(/^\/photo\//, '');
+  const key = c.req.path.replace('/api/patrols/photo/', '');
   const obj = await c.env.SENTINEL_R2.get(key);
   if (!obj) throw new HTTPException(404, { message: 'Photo not found' });
 
