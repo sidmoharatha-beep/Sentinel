@@ -323,7 +323,7 @@ export default function Patrols() {
         setGpsCoords({ lat, lon });
         const dist = distanceM(lat, lon, cp.latitude, cp.longitude);
         setGpsDistance(Math.round(dist));
-        setGpsState(dist <= 150 ? 'ok' : 'far'); // 150m threshold (generous for mobile GPS drift)
+        setGpsState(dist <= 20 ? 'ok' : 'far'); // 150m threshold (generous for mobile GPS drift)
       },
       () => setGpsState('error'),
       { enableHighAccuracy: true, timeout: 12000 }
@@ -383,25 +383,28 @@ export default function Patrols() {
   async function onQrDetected(scannedCode: string) {
     stopQrCamera();
     if (!scanModal) return;
-    if (scannedCode !== scanModal.qr_code) {
-      setQrError(`Wrong QR — expected "${scanModal.qr_code}" but got "${scannedCode}". Try again.`);
-      return;
-    }
     setQrError('');
-    // ── Load checklist for this checkpoint ──
-    await loadChecklist(scanModal.qr_code);
-    setScanStep('checklist');
-  }
-
-  // Separate function so it can also be called when manually bypassing QR
-  async function loadChecklist(qrCode: string) {
     setLoadingChecklist(true);
     try {
-      const d: any = await patrolApi.qrLookup(qrCode);
+      // Verify QR via DB lookup - this also loads the checklist
+      const d: any = await patrolApi.qrLookup(scannedCode);
+      if (!d.checkpoint) {
+        setQrError(`QR code not recognised. Please scan the correct checkpoint QR.`);
+        setLoadingChecklist(false);
+        return;
+      }
+      // Verify it matches the checkpoint we're trying to scan
+      if (d.checkpoint.checkpoint_code !== scanModal.checkpoint_code &&
+          d.checkpoint.id !== scanModal.checkpoint_id) {
+        setQrError(`Wrong checkpoint QR. You scanned "${d.checkpoint.name}" but this is "${scanModal.checkpoint_name}". Try again.`);
+        setLoadingChecklist(false);
+        return;
+      }
       const items: ChecklistItem[] = d.checkpoint?.checklist_items || [];
       setChecklistItems(items);
+      setScanStep('checklist');
     } catch {
-      setChecklistItems([]);
+      setQrError('QR verification failed. Please try again.');
     } finally {
       setLoadingChecklist(false);
     }
@@ -416,7 +419,7 @@ export default function Patrols() {
         setGpsCoords({ lat, lon });
         const dist = distanceM(lat, lon, scanModal.latitude, scanModal.longitude);
         setGpsDistance(Math.round(dist));
-        setGpsState(dist <= 150 ? 'ok' : 'far');
+        setGpsState(dist <= 20 ? 'ok' : 'far');
       },
       () => setGpsState('error'),
       { enableHighAccuracy: true, timeout: 12000 }
@@ -503,9 +506,19 @@ export default function Patrols() {
     if (!scanModal || !activePatrol) return;
     if (!photoBlob) { showToast('Photo is required before submitting', 'err'); return; }
     setSubmitting(true);
+    let photo_url = '';
     try {
       setUploadingPhoto(true);
-      const photoResult = await patrolApi.uploadPhoto(activePatrol.id, scanModal.checkpoint_id, photoBlob);
+      try {
+        const photoResult = await patrolApi.uploadPhoto(activePatrol.id, scanModal.checkpoint_id, photoBlob);
+        photo_url = photoResult.photo_url;
+      } catch (photoErr: any) {
+        // Photo upload failed - show specific error, don't proceed
+        showToast(`Photo upload failed: ${photoErr.message}`, 'err');
+        setSubmitting(false);
+        setUploadingPhoto(false);
+        return;
+      }
       setUploadingPhoto(false);
 
       const checklist_responses = checklistItems.map(item => ({
@@ -522,7 +535,7 @@ export default function Patrols() {
         notes: combinedNotes,
         latitude: gpsCoords?.lat,
         longitude: gpsCoords?.lon,
-        photo_url: photoResult.photo_url,
+        photo_url: photo_url,
         checklist_responses,
       });
 
@@ -917,7 +930,7 @@ export default function Patrols() {
                     {gpsState === 'far' && (
                       <><Navigation size={32} className="mx-auto mb-2 text-red-500" />
                         <p className="text-sm font-bold text-red-700">Too Far Away</p>
-                        <p className="text-xs text-red-600 mt-1">You are {gpsDistance}m away. Must be within 150m.</p>
+                        <p className="text-xs text-red-600 mt-1">You are {gpsDistance}m away. Must be within 20m.</p>
                         {gpsCoords && <p className="text-xs text-red-400 mt-1 font-mono">{gpsCoords.lat.toFixed(5)}, {gpsCoords.lon.toFixed(5)}</p>}
                         <button onClick={retryGps} className="mt-3 text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-lg">Retry GPS</button></>
                     )}
@@ -977,7 +990,12 @@ export default function Patrols() {
                   <button
                     onClick={async () => {
                       stopQrCamera();
-                      await loadChecklist(scanModal.qr_code);
+                      setLoadingChecklist(true);
+                      try {
+                        const d: any = await patrolApi.qrLookup(scanModal.qr_code);
+                        setChecklistItems(d.checkpoint?.checklist_items || []);
+                      } catch { setChecklistItems([]); }
+                      finally { setLoadingChecklist(false); }
                       setScanStep('checklist');
                     }}
                     className="w-full py-2 text-xs text-text-muted border border-dashed border-border rounded-xl hover:bg-surface-alt">
