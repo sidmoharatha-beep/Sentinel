@@ -145,6 +145,23 @@ app.get('/:id', async (c) => {
 
   if (!patrol) throw new HTTPException(404, { message: 'Patrol not found' });
 
+  // Backfill patrol_checkpoints if patrol is in_progress but has no checkpoint rows yet
+  if (patrol.status === 'in_progress') {
+    const existing = await c.env.SENTINEL_DB
+      .prepare('SELECT COUNT(*) as cnt FROM patrol_checkpoints WHERE patrol_id = ?')
+      .bind(id).first<{ cnt: number }>();
+    if ((existing?.cnt ?? 0) === 0) {
+      const siteCheckpoints = await c.env.SENTINEL_DB
+        .prepare('SELECT id FROM checkpoints WHERE site_id = ? ORDER BY checkpoint_code ASC')
+        .bind(patrol.site_id).all<{ id: number }>();
+      for (const cp of siteCheckpoints.results ?? []) {
+        await c.env.SENTINEL_DB
+          .prepare(`INSERT OR IGNORE INTO patrol_checkpoints (patrol_id, checkpoint_id, status) VALUES (?, ?, 'pending')`)
+          .bind(id, cp.id).run();
+      }
+    }
+  }
+
   const checkpoints = await c.env.SENTINEL_DB
     .prepare(`
       SELECT pc.id, pc.patrol_id, pc.checkpoint_id, pc.scanned_at, pc.status, pc.notes,
@@ -243,6 +260,19 @@ app.post('/:id/start', requireRole('system_admin', 'security_supervisor', 'secur
     .bind(id)
     .run();
 
+  // Insert patrol_checkpoint rows for every checkpoint in the site (if not already present)
+  const siteCheckpoints = await c.env.SENTINEL_DB
+    .prepare(`SELECT id FROM checkpoints WHERE site_id = (SELECT site_id FROM patrols WHERE id = ?) ORDER BY checkpoint_code ASC`)
+    .bind(id)
+    .all<{ id: number }>();
+
+  for (const cp of siteCheckpoints.results ?? []) {
+    await c.env.SENTINEL_DB
+      .prepare(`INSERT OR IGNORE INTO patrol_checkpoints (patrol_id, checkpoint_id, status) VALUES (?, ?, 'pending')`)
+      .bind(id, cp.id)
+      .run();
+  }
+
   await auditLog(c.env.SENTINEL_DB, {
     userId: user.id,
     action: 'patrol_start',
@@ -325,19 +355,20 @@ app.post('/:id/photo', requireRole('system_admin', 'security_supervisor', 'secur
   const file = form.get('photo');
   const checkpointId = form.get('checkpoint_id');
 
-  if (!file || !(file instanceof File)) {
+  if (!file || typeof (file as any).arrayBuffer !== 'function') {
     throw new HTTPException(400, { message: 'photo file is required' });
   }
+  const photoFile = file as unknown as File;
   if (!checkpointId) {
     throw new HTTPException(400, { message: 'checkpoint_id is required' });
   }
 
-  const ext = (file.type && file.type.split('/')[1]) || 'jpg';
+  const ext = (photoFile.type && photoFile.type.split('/')[1]) || 'jpg';
   const key = `patrols/${patrolId}/checkpoint-${checkpointId}-${Date.now()}-${user.id}.${ext}`;
 
-  const buffer = await file.arrayBuffer();
+  const buffer = await photoFile.arrayBuffer();
   await c.env.SENTINEL_R2.put(key, buffer, {
-    httpMetadata: { contentType: file.type || 'image/jpeg' },
+    httpMetadata: { contentType: photoFile.type || 'image/jpeg' },
   });
 
   return c.json({ photo_key: key, photo_url: `/api/patrols/photo/${key}` });
