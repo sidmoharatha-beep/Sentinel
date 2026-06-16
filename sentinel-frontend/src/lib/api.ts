@@ -92,13 +92,16 @@ export const patrolApi = {
   get:            (id: number) => api.get(`/patrols/${id}`),
   create:         (data: unknown) => api.post('/patrols', data),
   update:         (id: number, data: unknown) => api.patch(`/patrols/${id}`, data),
+  delete:         (id: number) => api.delete(`/patrols/${id}`),
   start:          (id: number) => api.post(`/patrols/${id}/start`, {}),
   complete:       (id: number) => api.post(`/patrols/${id}/complete`, {}),
+  forceComplete:  (id: number) => api.post(`/patrols/${id}/force-complete`, {}),
   scan:           (id: number, data: unknown) => api.post(`/patrols/${id}/scan`, data),
   currentShift:   () => api.get('/patrols/current-shift'),
   checkpointsDue: (site_id?: number) => api.get(`/patrols/checkpoints-due${site_id ? `?site_id=${site_id}` : ''}`),
   qrLookup:       (qr_code: string) => api.get(`/patrols/qr/${encodeURIComponent(qr_code)}`),
   uploadPhoto:    (patrolId: number, checkpointId: number, blob: Blob) => uploadCheckpointPhoto(patrolId, checkpointId, blob),
+  checklistSubmissions: (params?: Record<string, string>) => api.get(`/patrols/checklist-submissions${params ? `?${new URLSearchParams(params)}` : ''}`),
 };
 
 async function uploadCheckpointPhoto(patrolId: number, checkpointId: number, blob: Blob): Promise<{ photo_key: string; photo_url: string }> {

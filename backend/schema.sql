@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS patrol_checkpoints (
   longitude REAL,
   gps_accuracy REAL,
   photo_url TEXT,
+  UNIQUE(patrol_id, checkpoint_id),
   FOREIGN KEY (patrol_id) REFERENCES patrols(id) ON DELETE CASCADE,
   FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id)
 );

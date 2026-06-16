@@ -180,9 +180,9 @@ router.post('/', authenticateToken,
 
             // If a route is provided, copy its checkpoints
             if (route_id) {
-              db.all('SELECT checkpoint_id FROM route_checkpoints WHERE route_id = ? ORDER BY sequence_order', [route_id], (err5, rows) => {
+              db.all('SELECT DISTINCT checkpoint_id FROM route_checkpoints WHERE route_id = ? ORDER BY sequence_order', [route_id], (err5, rows) => {
                 if (!err5 && rows) {
-                  const insertPc = db.prepare('INSERT INTO patrol_checkpoints (patrol_id, checkpoint_id, status) VALUES (?, ?, ?)');
+                  const insertPc = db.prepare('INSERT OR IGNORE INTO patrol_checkpoints (patrol_id, checkpoint_id, status) VALUES (?, ?, ?)');
                   rows.forEach(rc => insertPc.run(patrolId, rc.checkpoint_id, 'pending'));
                   insertPc.finalize();
                 }
@@ -190,9 +190,9 @@ router.post('/', authenticateToken,
               });
             } else {
               // Add all site checkpoints
-              db.all('SELECT id FROM checkpoints WHERE site_id = ? AND is_active = 1', [site_id], (err5, cps) => {
+              db.all('SELECT DISTINCT id FROM checkpoints WHERE site_id = ? AND is_active = 1', [site_id], (err5, cps) => {
                 if (!err5 && cps) {
-                  const insertPc = db.prepare('INSERT INTO patrol_checkpoints (patrol_id, checkpoint_id, status) VALUES (?, ?, ?)');
+                  const insertPc = db.prepare('INSERT OR IGNORE INTO patrol_checkpoints (patrol_id, checkpoint_id, status) VALUES (?, ?, ?)');
                   cps.forEach(cp => insertPc.run(patrolId, cp.id, 'pending'));
                   insertPc.finalize();
                 }
@@ -453,5 +453,95 @@ router.delete('/:id', authenticateToken, requireRole('system_admin'), (req, res)
     res.status(204).send();
   });
 });
+
+// ─── POST /:id/force-complete (Admin: Force complete in-progress patrol) ───
+router.post('/:id/force-complete', authenticateToken,
+  requireRole('system_admin', 'security_manager'),
+  (req, res) => {
+    db.get('SELECT * FROM patrols WHERE id = ?', [req.params.id], (err, patrol) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!patrol) return res.status(404).json({ error: 'Patrol not found' });
+      if (patrol.status === 'completed') return res.status(400).json({ error: 'Patrol already completed' });
+
+      db.run(
+        "UPDATE patrols SET status = 'completed', actual_end = CURRENT_TIMESTAMP WHERE id = ?",
+        [req.params.id],
+        function(err2) {
+          if (err2) return res.status(500).json({ error: err2.message });
+          auditLog(db, {
+            userId: req.user.id,
+            action: 'patrol_force_complete',
+            description: `Admin force-completed patrol #${req.params.id}`,
+            ipAddress: req.ip,
+            deviceInfo: req.headers['user-agent'],
+            relatedId: parseInt(req.params.id),
+            relatedType: 'patrol'
+          });
+          db.get(`
+            SELECT p.*, r.name as route_name, u.full_name as guard_name, s.name as site_name
+            FROM patrols p LEFT JOIN patrol_routes r ON p.route_id = r.id
+            LEFT JOIN users u ON p.guard_id = u.id LEFT JOIN sites s ON p.site_id = s.id
+            WHERE p.id = ?
+          `, [req.params.id], (err3, updated) => {
+            if (err3) return res.status(500).json({ error: err3.message });
+            res.json({ patrol: updated });
+          });
+        }
+      );
+    });
+  }
+);
+
+// ─── GET /checklist-submissions (Export checklist data) ─────────────────────
+// Returns all checkpoint checklist submission entries (for Excel/PDF download)
+router.get('/checklist-submissions', authenticateToken,
+  requireRole('system_admin', 'security_manager'),
+  (req, res) => {
+    const { site_id, date_from, date_to, patrol_id } = req.query;
+    let sql = `
+      SELECT
+        p.id as patrol_id,
+        p.shift,
+        p.status as patrol_status,
+        p.scheduled_start,
+        p.actual_start,
+        p.actual_end,
+        u.full_name as guard_name,
+        u.employee_id as guard_employee_id,
+        s.name as site_name,
+        c.checkpoint_code,
+        c.name as checkpoint_name,
+        c.area_type,
+        pc.status as checkpoint_status,
+        pc.scanned_at,
+        pc.notes as checkpoint_notes,
+        pc.latitude,
+        pc.longitude,
+        ci.category as checklist_category,
+        ci.item_text as checklist_item,
+        cr.response as checklist_response,
+        cr.notes as checklist_notes
+      FROM patrols p
+      LEFT JOIN users u ON p.guard_id = u.id
+      LEFT JOIN sites s ON p.site_id = s.id
+      LEFT JOIN patrol_checkpoints pc ON pc.patrol_id = p.id
+      LEFT JOIN checkpoints c ON pc.checkpoint_id = c.id
+      LEFT JOIN checklist_items ci ON ci.checkpoint_id = c.id
+      LEFT JOIN checklist_responses cr ON cr.patrol_checkpoint_id = pc.id AND cr.checklist_item_id = ci.id
+      WHERE pc.status = 'scanned'
+    `;
+    const params = [];
+    if (site_id) { sql += ' AND p.site_id = ?'; params.push(site_id); }
+    if (patrol_id) { sql += ' AND p.id = ?'; params.push(patrol_id); }
+    if (date_from) { sql += ' AND p.scheduled_start >= ?'; params.push(date_from); }
+    if (date_to) { sql += ' AND p.scheduled_start <= ?'; params.push(date_to); }
+    sql += ' ORDER BY p.scheduled_start DESC, c.checkpoint_code ASC, ci.sort_order ASC';
+
+    db.all(sql, params, (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ submissions: rows || [], count: (rows || []).length });
+    });
+  }
+);
 
 module.exports = router;
