@@ -6,7 +6,7 @@ import { api, patrolApi } from '@/lib/api';
 import {
   Users, Shield, Info, Loader2, AlertCircle,
   RefreshCw, CheckCircle2, Building2, Pencil, Trash2, KeyRound, X, Save,
-  Download, FileSpreadsheet, FileText, StopCircle, ClipboardList,
+  FileSpreadsheet, FileText, StopCircle, ClipboardList,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
