@@ -12,17 +12,21 @@ import { patrolApi, api } from '@/lib/api';
 import { useAuth } from '@/lib/AuthContext';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
+// D1 stores CURRENT_TIMESTAMP as UTC without 'Z' — append it so JS parses correctly
+function parseUTC(iso: string) {
+  return new Date(iso.includes('Z') || iso.includes('+') ? iso : iso + 'Z');
+}
 function fmtTime(iso: string | null) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  return parseUTC(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 }
 function fmtDate(iso: string | null) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return parseUTC(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function fmtDateTime(iso: string | null) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('en-IN', {
+  return parseUTC(iso).toLocaleString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: false,
   });

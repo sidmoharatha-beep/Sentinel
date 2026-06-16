@@ -12,7 +12,9 @@ app.use('*', async (c, next) => {
 });
 
 function getCurrentShift() {
-  const hour = new Date().getHours();
+  // Cloudflare Workers run in UTC — convert to IST (UTC+5:30)
+  const nowIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const hour = nowIST.getUTCHours();
   if (hour >= 6 && hour < 14) return 'A';
   if (hour >= 14 && hour < 22) return 'B';
   return 'C';
