@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Layout } from '@/components/Layout';
 import {
   ShieldCheck, Clock, MapPin, QrCode, Play, CheckSquare,
   RefreshCw, AlertCircle, Loader2, X, Navigation, CheckCircle2,
-  FileText, TriangleAlert, ChevronDown, ChevronUp,
+  FileText, TriangleAlert, ChevronDown, ChevronUp, Camera, ScanLine,
+  ThumbsUp, ThumbsDown, RotateCcw,
 } from 'lucide-react';
+import jsQR from 'jsqr';
 import { cn } from '@/lib/utils';
 import { patrolApi, api } from '@/lib/api';
 import { useAuth } from '@/lib/AuthContext';
@@ -62,6 +64,13 @@ interface PatrolCheckpoint {
   qr_code: string;
 }
 
+interface ChecklistItem {
+  id: number;
+  category: string;
+  item_text: string;
+  is_required: number;
+}
+
 const STATUS_COLOR: Record<string, string> = {
   scheduled:   'bg-blue-100 text-blue-700',
   in_progress: 'bg-amber-100 text-amber-700',
@@ -94,6 +103,7 @@ export default function Patrols() {
   const [loadingDetail, setLoadingDetail]         = useState(false);
 
   const [scanModal, setScanModal]       = useState<PatrolCheckpoint | null>(null);
+  const [scanStep, setScanStep]         = useState<'qr'|'gps'|'checklist'|'photo'|'review'>('qr');
   const [gpsState, setGpsState]         = useState<'idle'|'checking'|'ok'|'far'|'error'>('idle');
   const [gpsCoords, setGpsCoords]       = useState<{lat:number,lon:number}|null>(null);
   const [gpsDistance, setGpsDistance]   = useState<number|null>(null);
@@ -101,6 +111,27 @@ export default function Patrols() {
   const [scanIncident, setScanIncident] = useState('');
   const [showIncident, setShowIncident] = useState(false);
   const [submitting, setSubmitting]     = useState(false);
+
+  // QR scanning
+  const [qrError, setQrError]           = useState('');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const qrStreamRef = useRef<MediaStream | null>(null);
+  const qrRafRef = useRef<number | null>(null);
+
+  // Checklist
+  const [checklistItems, setChecklistItems]     = useState<ChecklistItem[]>([]);
+  const [checklistAnswers, setChecklistAnswers] = useState<Record<number, 'ok'|'issue'>>({});
+  const [loadingChecklist, setLoadingChecklist] = useState(false);
+
+  // Photo capture
+  const photoVideoRef = useRef<HTMLVideoElement | null>(null);
+  const photoCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const photoStreamRef = useRef<MediaStream | null>(null);
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [photoBlob, setPhotoBlob]       = useState<Blob | null>(null);
+  const [photoError, setPhotoError]     = useState('');
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const [allCheckpoints, setAllCheckpoints] = useState<Checkpoint[]>([]);
   const [loadingQR, setLoadingQR]           = useState(false);
@@ -165,10 +196,91 @@ export default function Patrols() {
     finally { setStarting(false); }
   }
 
-  function checkGPS(cp: PatrolCheckpoint) {
+  // ── Open scan modal (starts at QR step) ───────────────────────────────
+  function openScanModal(cp: PatrolCheckpoint) {
     setScanModal(cp);
+    setScanStep('qr');
     setScanNote(''); setScanIncident(''); setShowIncident(false);
-    setGpsState('checking'); setGpsCoords(null); setGpsDistance(null);
+    setGpsState('idle'); setGpsCoords(null); setGpsDistance(null);
+    setQrError('');
+    setChecklistItems([]); setChecklistAnswers({});
+    setPhotoDataUrl(null); setPhotoBlob(null); setPhotoError('');
+  }
+
+  function closeScanModal() {
+    stopQrCamera(); stopPhotoCamera();
+    setScanModal(null);
+  }
+
+  // ── QR Camera ─────────────────────────────────────────────────────────
+  async function startQrCamera() {
+    setQrError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      qrStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        requestAnimationFrame(scanQrFrame);
+      }
+    } catch {
+      setQrError('Camera permission denied. Please allow camera access.');
+    }
+  }
+
+  function stopQrCamera() {
+    if (qrRafRef.current) cancelAnimationFrame(qrRafRef.current);
+    qrStreamRef.current?.getTracks().forEach(t => t.stop());
+    qrStreamRef.current = null;
+  }
+
+  function scanQrFrame() {
+    const video = videoRef.current;
+    const canvas = qrCanvasRef.current;
+    if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) {
+      qrRafRef.current = requestAnimationFrame(scanQrFrame);
+      return;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height);
+    if (code) {
+      onQrDetected(code.data);
+    } else {
+      qrRafRef.current = requestAnimationFrame(scanQrFrame);
+    }
+  }
+
+  async function onQrDetected(scannedCode: string) {
+    stopQrCamera();
+    if (!scanModal) return;
+    if (scannedCode !== scanModal.qr_code) {
+      setQrError(`Wrong QR code. Expected "${scanModal.qr_code}" but scanned "${scannedCode}". Try again.`);
+      return;
+    }
+    setQrError('');
+    // Load checklist items for this checkpoint
+    setLoadingChecklist(true);
+    try {
+      const d: any = await patrolApi.qrLookup(scannedCode);
+      setChecklistItems(d.checklist_items || []);
+    } catch {
+      setChecklistItems([]);
+    } finally { setLoadingChecklist(false); }
+    // Move to GPS step
+    goToGps(scanModal);
+  }
+
+  // ── GPS ───────────────────────────────────────────────────────────────
+  function goToGps(cp: PatrolCheckpoint) {
+    setScanStep('gps');
+    setGpsState('checking');
     navigator.geolocation.getCurrentPosition(
       pos => {
         const lat = pos.coords.latitude, lon = pos.coords.longitude;
@@ -182,24 +294,104 @@ export default function Patrols() {
     );
   }
 
+  // ── Photo Camera ──────────────────────────────────────────────────────
+  async function startPhotoCamera() {
+    setPhotoError(''); setPhotoDataUrl(null); setPhotoBlob(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      photoStreamRef.current = stream;
+      if (photoVideoRef.current) {
+        photoVideoRef.current.srcObject = stream;
+        photoVideoRef.current.play();
+      }
+    } catch {
+      setPhotoError('Camera permission denied. Please allow camera access.');
+    }
+  }
+
+  function stopPhotoCamera() {
+    photoStreamRef.current?.getTracks().forEach(t => t.stop());
+    photoStreamRef.current = null;
+  }
+
+  function capturePhoto() {
+    const video = photoVideoRef.current;
+    const canvas = photoCanvasRef.current;
+    if (!video || !canvas) return;
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0);
+
+    // Burn timestamp overlay
+    const now = new Date();
+    const ts = now.toLocaleString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    });
+    const label = `${scanModal?.checkpoint_name || ''} · ${ts}`;
+    const fontSize = Math.max(18, Math.round(canvas.width / 40));
+    ctx.font = `bold ${fontSize}px monospace`;
+    const metrics = ctx.measureText(label);
+    const pad = 10;
+    const bx = pad, by = canvas.height - fontSize - pad * 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bx - 4, by - 4, metrics.width + 16, fontSize + 14);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, bx + 4, by + fontSize);
+
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      setPhotoBlob(blob);
+      setPhotoDataUrl(canvas.toDataURL('image/jpeg', 0.85));
+      stopPhotoCamera();
+    }, 'image/jpeg', 0.85);
+  }
+
+  function retakePhoto() {
+    setPhotoDataUrl(null); setPhotoBlob(null);
+    startPhotoCamera();
+  }
+
+  // ── Submit ────────────────────────────────────────────────────────────
   async function submitScan() {
     if (!scanModal || !activePatrol) return;
-    if (gpsState !== 'ok') { showToast('You must be within 100 m of the checkpoint'); return; }
+    if (!photoBlob) { showToast('Photo is required'); return; }
     setSubmitting(true);
     try {
-      await (api.patch as any)(`/patrols/${activePatrol.id}/checkpoints/${scanModal.id}`, {
-        status: 'scanned',
-        notes: scanNote || null,
+      // 1. Upload photo
+      setUploadingPhoto(true);
+      const photoResult = await patrolApi.uploadPhoto(activePatrol.id, scanModal.checkpoint_id, photoBlob);
+      setUploadingPhoto(false);
+
+      // 2. Build checklist responses
+      const checklist_responses = checklistItems.map(item => ({
+        checklist_item_id: item.id,
+        response: checklistAnswers[item.id] || 'na',
+        notes: null,
+      }));
+
+      // 3. Submit scan
+      const combinedNotes = [scanNote, scanIncident ? `Incident: ${scanIncident}` : null]
+        .filter(Boolean).join(' | ') || null;
+      await (api.post as any)(`/patrols/${activePatrol.id}/scan`, {
+        checkpoint_id: scanModal.checkpoint_id,
+        notes: combinedNotes,
         latitude: gpsCoords?.lat,
         longitude: gpsCoords?.lon,
-        incident_description: scanIncident || null,
+        photo_url: photoResult.photo_url,
+        checklist_responses,
       });
-      setScanModal(null);
+
+      closeScanModal();
       showToast(`✓ ${scanModal.checkpoint_name} marked`);
       const d: any = await patrolApi.get(activePatrol.id);
       setPatrolCheckpoints(d.checkpoints || []);
     } catch (e: any) { showToast(`Error: ${e.message}`); }
-    finally { setSubmitting(false); }
+    finally { setSubmitting(false); setUploadingPhoto(false); }
   }
 
   async function handleComplete() {
@@ -430,7 +622,7 @@ export default function Patrols() {
                     </div>
                   </div>
                   {activePatrol.status === 'in_progress' && cp.status !== 'scanned' && (
-                    <button onClick={() => checkGPS(cp)}
+                    <button onClick={() => openScanModal(cp)}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent/90 transition-colors">
                       <QrCode size={12}/> Scan
                     </button>
@@ -454,76 +646,281 @@ export default function Patrols() {
         </div>
       )}
 
-      {/* GPS + SCAN MODAL */}
+      {/* ── SCAN WIZARD MODAL ─────────────────────────────────────────── */}
       {scanModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-[60] p-0 sm:p-4">
-          <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full max-w-md">
-            <div className="p-5 border-b border-border flex items-center justify-between">
-              <h3 className="text-base font-semibold text-primary flex items-center gap-2">
-                <QrCode size={16}/> {scanModal.checkpoint_name}
-              </h3>
-              <button onClick={() => setScanModal(null)} className="p-1 rounded-md hover:bg-surface-alt text-text-muted"><X size={16}/></button>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className={cn('p-4 rounded-xl border-2 text-center',
-                gpsState === 'checking' ? 'border-blue-200 bg-blue-50' :
-                gpsState === 'ok'       ? 'border-green-300 bg-green-50' :
-                gpsState === 'far'      ? 'border-red-300 bg-red-50' :
-                gpsState === 'error'    ? 'border-orange-300 bg-orange-50' : 'border-border bg-surface-alt'
-              )}>
-                {gpsState === 'checking' && (
-                  <><Loader2 size={24} className="animate-spin mx-auto mb-2 text-blue-500"/>
-                  <p className="text-sm font-medium text-blue-700">Getting your location…</p></>
-                )}
-                {gpsState === 'ok' && (
-                  <><CheckCircle2 size={28} className="mx-auto mb-2 text-green-500"/>
-                  <p className="text-sm font-bold text-green-700">✓ Location Verified</p>
-                  <p className="text-xs text-green-600 mt-1">You are {gpsDistance}m from the checkpoint</p></>
-                )}
-                {gpsState === 'far' && (
-                  <><Navigation size={28} className="mx-auto mb-2 text-red-500"/>
-                  <p className="text-sm font-bold text-red-700">Too Far Away</p>
-                  <p className="text-xs text-red-600 mt-1">You are {gpsDistance}m away. Must be within 100m.</p>
-                  <button onClick={() => checkGPS(scanModal)} className="mt-2 text-xs text-red-600 underline">Try again</button></>
-                )}
-                {gpsState === 'error' && (
-                  <><AlertCircle size={28} className="mx-auto mb-2 text-orange-500"/>
-                  <p className="text-sm font-bold text-orange-700">GPS Error</p>
-                  <p className="text-xs text-orange-600 mt-1">Please enable location access and try again.</p>
-                  <button onClick={() => checkGPS(scanModal)} className="mt-2 text-xs text-orange-600 underline">Retry</button></>
-                )}
-              </div>
+        <div className="fixed inset-0 bg-black/70 flex items-end sm:items-center justify-center z-[60] p-0 sm:p-4">
+          <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full max-w-md flex flex-col max-h-[92vh]">
 
+            {/* Header */}
+            <div className="p-4 border-b border-border flex items-center justify-between shrink-0">
               <div>
-                <label className="text-xs font-medium text-text-muted block mb-1 flex items-center gap-1">
-                  <FileText size={12}/> Observation Note <span className="text-gray-400">(optional)</span>
-                </label>
-                <textarea value={scanNote} onChange={e => setScanNote(e.target.value)}
-                  rows={2} placeholder="Everything normal / any observation…"
-                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 resize-none"/>
+                <p className="text-xs text-text-muted font-medium uppercase tracking-wide">
+                  {scanStep === 'qr' ? 'Step 1 / 5 · Scan QR' :
+                   scanStep === 'gps' ? 'Step 2 / 5 · Verify Location' :
+                   scanStep === 'checklist' ? 'Step 3 / 5 · Checklist' :
+                   scanStep === 'photo' ? 'Step 4 / 5 · Capture Photo' :
+                   'Step 5 / 5 · Review & Submit'}
+                </p>
+                <h3 className="text-sm font-semibold text-primary">{scanModal.checkpoint_name}</h3>
               </div>
-
-              <div>
-                <button onClick={() => setShowIncident(v => !v)}
-                  className="flex items-center gap-2 text-xs font-medium text-danger hover:text-danger/80 transition-colors">
-                  <TriangleAlert size={13}/>
-                  {showIncident ? 'Hide' : 'Report an Incident'} (optional)
-                  {showIncident ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
-                </button>
-                {showIncident && (
-                  <textarea value={scanIncident} onChange={e => setScanIncident(e.target.value)}
-                    rows={2} placeholder="Describe the incident…"
-                    className="mt-2 w-full border border-danger/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-danger/20 resize-none"/>
-                )}
-              </div>
+              <button onClick={closeScanModal} className="p-1.5 rounded-lg hover:bg-surface-alt text-text-muted"><X size={16}/></button>
             </div>
-            <div className="px-5 pb-5 flex gap-2">
-              <button onClick={() => setScanModal(null)}
-                className="flex-1 py-2.5 text-sm border border-border rounded-xl hover:bg-surface-alt transition-colors">Cancel</button>
-              <button onClick={submitScan} disabled={submitting || gpsState !== 'ok'}
-                className="flex-1 py-2.5 text-sm bg-accent text-white rounded-xl hover:bg-accent/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
-                {submitting ? <Loader2 size={14} className="animate-spin"/> : <CheckCircle2 size={14}/>} Mark Visited
+
+            {/* Step progress dots */}
+            <div className="flex gap-1.5 px-4 py-2 shrink-0">
+              {(['qr','gps','checklist','photo','review'] as const).map((s, i) => (
+                <div key={s} className={cn('h-1 rounded-full flex-1 transition-all',
+                  s === scanStep ? 'bg-accent' :
+                  ['qr','gps','checklist','photo','review'].indexOf(scanStep) > i ? 'bg-green-400' : 'bg-gray-200'
+                )}/>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+
+              {/* ── STEP 1: QR SCAN ───────────────────────────────────── */}
+              {scanStep === 'qr' && (
+                <div className="p-4 space-y-3">
+                  <p className="text-xs text-text-muted text-center">Point your camera at the QR code on the checkpoint board.</p>
+                  <div className="relative bg-black rounded-xl overflow-hidden" style={{aspectRatio:'4/3'}}>
+                    <video ref={videoRef} className="w-full h-full object-cover" playsInline muted autoPlay/>
+                    <canvas ref={qrCanvasRef} className="hidden"/>
+                    {/* Scan guide overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="w-44 h-44 border-2 border-white/70 rounded-xl relative">
+                        <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-accent rounded-tl-md"/>
+                        <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-accent rounded-tr-md"/>
+                        <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-accent rounded-bl-md"/>
+                        <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-accent rounded-br-md"/>
+                      </div>
+                    </div>
+                    <div className="absolute bottom-2 inset-x-0 flex justify-center">
+                      <span className="bg-black/60 text-white text-xs px-3 py-1 rounded-full flex items-center gap-1">
+                        <ScanLine size={11}/> Scanning…
+                      </span>
+                    </div>
+                  </div>
+                  {qrError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 text-center">{qrError}</div>
+                  )}
+                  {!qrStreamRef.current && (
+                    <button onClick={startQrCamera}
+                      className="w-full py-3 bg-accent text-white rounded-xl text-sm font-medium flex items-center justify-center gap-2">
+                      <Camera size={16}/> Open Camera
+                    </button>
+                  )}
+                  {qrError && (
+                    <button onClick={() => { setQrError(''); startQrCamera(); }}
+                      className="w-full py-2.5 border border-border rounded-xl text-sm text-text-muted hover:bg-surface-alt">
+                      Try Again
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* ── STEP 2: GPS ───────────────────────────────────────── */}
+              {scanStep === 'gps' && (
+                <div className="p-4 space-y-3">
+                  <div className={cn('p-5 rounded-xl border-2 text-center',
+                    gpsState === 'checking' ? 'border-blue-200 bg-blue-50' :
+                    gpsState === 'ok'       ? 'border-green-300 bg-green-50' :
+                    gpsState === 'far'      ? 'border-red-300 bg-red-50' :
+                                              'border-orange-300 bg-orange-50'
+                  )}>
+                    {gpsState === 'checking' && (<><Loader2 size={32} className="animate-spin mx-auto mb-2 text-blue-500"/><p className="text-sm font-medium text-blue-700">Getting your location…</p></>)}
+                    {gpsState === 'ok' && (<><CheckCircle2 size={36} className="mx-auto mb-2 text-green-500"/><p className="text-sm font-bold text-green-700">✓ Location Verified</p><p className="text-xs text-green-600 mt-1">You are {gpsDistance}m from the checkpoint</p></>)}
+                    {gpsState === 'far' && (<>
+                      <Navigation size={32} className="mx-auto mb-2 text-red-500"/>
+                      <p className="text-sm font-bold text-red-700">Too Far Away</p>
+                      <p className="text-xs text-red-600 mt-1">You are {gpsDistance}m away. Must be within 100m.</p>
+                      {gpsCoords && <p className="text-xs text-red-500 mt-1">Your GPS: {gpsCoords.lat.toFixed(5)}, {gpsCoords.lon.toFixed(5)}</p>}
+                      <button onClick={() => goToGps(scanModal)} className="mt-2 text-xs text-red-600 underline">Try again</button>
+                    </>)}
+                    {gpsState === 'error' && (<><AlertCircle size={32} className="mx-auto mb-2 text-orange-500"/><p className="text-sm font-bold text-orange-700">GPS Error</p><p className="text-xs text-orange-600 mt-1">Enable location access and retry.</p><button onClick={() => goToGps(scanModal)} className="mt-2 text-xs text-orange-600 underline">Retry</button></>)}
+                  </div>
+                  {gpsState === 'ok' && (
+                    <button onClick={() => setScanStep('checklist')}
+                      className="w-full py-3 bg-accent text-white rounded-xl text-sm font-medium flex items-center justify-center gap-2">
+                      Next: Checklist →
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* ── STEP 3: CHECKLIST ─────────────────────────────────── */}
+              {scanStep === 'checklist' && (
+                <div className="p-4 space-y-2">
+                  {loadingChecklist ? (
+                    <div className="flex items-center justify-center py-10 gap-2 text-text-muted"><Loader2 size={18} className="animate-spin"/> Loading checklist…</div>
+                  ) : checklistItems.length === 0 ? (
+                    <div className="text-center py-8 text-text-muted text-sm">No checklist items for this checkpoint.</div>
+                  ) : (
+                    <>
+                      <p className="text-xs text-text-muted mb-2">Answer all items. Mark <span className="text-green-600 font-medium">OK</span> or <span className="text-red-600 font-medium">Issue</span>.</p>
+                      {['Security','Safety','Fire','Environmental','Housekeeping'].map(cat => {
+                        const items = checklistItems.filter(i => i.category === cat);
+                        if (!items.length) return null;
+                        return (
+                          <div key={cat} className="mb-3">
+                            <p className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5">{cat}</p>
+                            {items.map(item => (
+                              <div key={item.id} className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-white mb-1.5">
+                                <p className="text-xs text-primary flex-1 pr-2">{item.item_text}</p>
+                                <div className="flex gap-1.5 shrink-0">
+                                  <button
+                                    onClick={() => setChecklistAnswers(a => ({ ...a, [item.id]: 'ok' }))}
+                                    className={cn('flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all',
+                                      checklistAnswers[item.id] === 'ok'
+                                        ? 'bg-green-500 text-white border-green-500'
+                                        : 'border-gray-200 text-gray-500 hover:bg-green-50'
+                                    )}>
+                                    <ThumbsUp size={11}/> OK
+                                  </button>
+                                  <button
+                                    onClick={() => setChecklistAnswers(a => ({ ...a, [item.id]: 'issue' }))}
+                                    className={cn('flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-all',
+                                      checklistAnswers[item.id] === 'issue'
+                                        ? 'bg-red-500 text-white border-red-500'
+                                        : 'border-gray-200 text-gray-500 hover:bg-red-50'
+                                    )}>
+                                    <ThumbsDown size={11}/> Issue
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── STEP 4: PHOTO ─────────────────────────────────────── */}
+              {scanStep === 'photo' && (
+                <div className="p-4 space-y-3">
+                  <p className="text-xs text-text-muted text-center">Take a <strong>live photo</strong> of the checkpoint area. Gallery uploads are not allowed.</p>
+                  {!photoDataUrl ? (
+                    <>
+                      <div className="relative bg-black rounded-xl overflow-hidden" style={{aspectRatio:'4/3'}}>
+                        <video ref={photoVideoRef} className="w-full h-full object-cover" playsInline muted autoPlay/>
+                        <canvas ref={photoCanvasRef} className="hidden"/>
+                        {!photoStreamRef.current && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <Camera size={40} className="text-white/40"/>
+                          </div>
+                        )}
+                        {/* Timestamp preview */}
+                        <div className="absolute bottom-2 left-2 right-2">
+                          <span className="bg-black/60 text-white font-mono text-xs px-2 py-0.5 rounded">
+                            {scanModal.checkpoint_name} · {new Date().toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false,day:'2-digit',month:'short',year:'numeric'})}
+                          </span>
+                        </div>
+                      </div>
+                      {photoError && <p className="text-xs text-red-600 text-center">{photoError}</p>}
+                      {!photoStreamRef.current
+                        ? <button onClick={startPhotoCamera} className="w-full py-3 bg-accent text-white rounded-xl text-sm font-medium flex items-center justify-center gap-2"><Camera size={16}/> Open Camera</button>
+                        : <button onClick={capturePhoto} className="w-full py-3 bg-accent text-white rounded-xl text-sm font-medium flex items-center justify-center gap-2"><Camera size={16}/> Capture Photo</button>
+                      }
+                    </>
+                  ) : (
+                    <>
+                      <div className="rounded-xl overflow-hidden border border-border">
+                        <img src={photoDataUrl} alt="Captured" className="w-full object-cover"/>
+                      </div>
+                      <p className="text-xs text-green-600 text-center font-medium">✓ Photo captured with timestamp</p>
+                      <button onClick={retakePhoto} className="w-full py-2.5 border border-border rounded-xl text-sm text-text-muted hover:bg-surface-alt flex items-center justify-center gap-2">
+                        <RotateCcw size={14}/> Retake
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── STEP 5: REVIEW & SUBMIT ───────────────────────────── */}
+              {scanStep === 'review' && (
+                <div className="p-4 space-y-3">
+                  {/* Photo thumbnail */}
+                  {photoDataUrl && (
+                    <div className="rounded-xl overflow-hidden border border-border h-32">
+                      <img src={photoDataUrl} alt="Photo" className="w-full h-full object-cover"/>
+                    </div>
+                  )}
+                  {/* Checklist summary */}
+                  <div className="p-3 bg-gray-50 rounded-xl border border-border">
+                    <p className="text-xs font-semibold text-text-muted mb-1.5">Checklist Summary</p>
+                    <div className="flex gap-3 text-xs">
+                      <span className="text-green-600 font-medium">✓ {Object.values(checklistAnswers).filter(v=>v==='ok').length} OK</span>
+                      <span className="text-red-600 font-medium">⚠ {Object.values(checklistAnswers).filter(v=>v==='issue').length} Issues</span>
+                      <span className="text-gray-400">{checklistItems.length - Object.keys(checklistAnswers).length} unanswered</span>
+                    </div>
+                  </div>
+                  {/* Observation note */}
+                  <div>
+                    <label className="text-xs font-medium text-text-muted block mb-1 flex items-center gap-1">
+                      <FileText size={11}/> Observation Note <span className="text-gray-400">(optional)</span>
+                    </label>
+                    <textarea value={scanNote} onChange={e => setScanNote(e.target.value)}
+                      rows={2} placeholder="Everything normal / any observation…"
+                      className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 resize-none"/>
+                  </div>
+                  {/* Incident */}
+                  <div>
+                    <button onClick={() => setShowIncident(v => !v)}
+                      className="flex items-center gap-2 text-xs font-medium text-red-600 hover:text-red-700">
+                      <TriangleAlert size={12}/>
+                      {showIncident ? 'Hide' : 'Report an Incident'} (optional)
+                      {showIncident ? <ChevronUp size={11}/> : <ChevronDown size={11}/>}
+                    </button>
+                    {showIncident && (
+                      <textarea value={scanIncident} onChange={e => setScanIncident(e.target.value)}
+                        rows={2} placeholder="Describe the incident…"
+                        className="mt-2 w-full border border-red-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-100 resize-none"/>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer buttons */}
+            <div className="p-4 border-t border-border shrink-0 flex gap-2">
+              <button onClick={closeScanModal}
+                className="flex-none px-4 py-2.5 text-sm border border-border rounded-xl hover:bg-surface-alt transition-colors">
+                Cancel
               </button>
+
+              {scanStep === 'checklist' && (
+                <button
+                  onClick={() => {
+                    const required = checklistItems.filter(i => i.is_required);
+                    const unanswered = required.filter(i => !checklistAnswers[i.id]);
+                    if (unanswered.length > 0) {
+                      showToast(`Please answer all ${unanswered.length} required items`);
+                      return;
+                    }
+                    setScanStep('photo');
+                  }}
+                  className="flex-1 py-2.5 text-sm bg-accent text-white rounded-xl hover:bg-accent/90 transition-colors font-medium">
+                  Next: Photo →
+                </button>
+              )}
+
+              {scanStep === 'photo' && photoDataUrl && (
+                <button onClick={() => setScanStep('review')}
+                  className="flex-1 py-2.5 text-sm bg-accent text-white rounded-xl hover:bg-accent/90 transition-colors font-medium">
+                  Next: Review →
+                </button>
+              )}
+
+              {scanStep === 'review' && (
+                <button onClick={submitScan} disabled={submitting || !photoBlob}
+                  className="flex-1 py-2.5 text-sm bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 font-medium">
+                  {submitting
+                    ? <><Loader2 size={14} className="animate-spin"/> {uploadingPhoto ? 'Uploading photo…' : 'Submitting…'}</>
+                    : <><CheckCircle2 size={14}/> Mark Visited</>
+                  }
+                </button>
+              )}
             </div>
           </div>
         </div>

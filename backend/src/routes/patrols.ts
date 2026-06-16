@@ -147,8 +147,11 @@ app.get('/:id', async (c) => {
 
   const checkpoints = await c.env.SENTINEL_DB
     .prepare(`
-      SELECT pc.*, c.name as checkpoint_name, c.checkpoint_code, c.description as checkpoint_description,
-             c.area_type, c.patrol_frequency_hours, c.latitude as cp_lat, c.longitude as cp_lng
+      SELECT pc.id, pc.patrol_id, pc.checkpoint_id, pc.scanned_at, pc.status, pc.notes,
+             pc.latitude as scanned_latitude, pc.longitude as scanned_longitude,
+             pc.gps_accuracy, pc.photo_url,
+             c.name as checkpoint_name, c.checkpoint_code, c.description as checkpoint_description,
+             c.area_type, c.patrol_frequency_hours, c.latitude, c.longitude, c.qr_code
       FROM patrol_checkpoints pc
       LEFT JOIN checkpoints c ON pc.checkpoint_id = c.id
       WHERE pc.patrol_id = ?
@@ -310,6 +313,49 @@ app.post('/:id/complete', requireRole('system_admin', 'security_supervisor', 'se
     .first<Record<string, any>>();
 
   return c.json({ patrol: row });
+});
+
+// ─── POST /:id/photo ──────────────────────────────────────────────────────
+// Upload a live-captured checkpoint photo to R2, returns its public path.
+app.post('/:id/photo', requireRole('system_admin', 'security_supervisor', 'security_guard'), async (c) => {
+  const user = c.get('user') as User;
+  const patrolId = Number(c.req.param('id'));
+
+  const form = await c.req.formData();
+  const file = form.get('photo');
+  const checkpointId = form.get('checkpoint_id');
+
+  if (!file || !(file instanceof File)) {
+    throw new HTTPException(400, { message: 'photo file is required' });
+  }
+  if (!checkpointId) {
+    throw new HTTPException(400, { message: 'checkpoint_id is required' });
+  }
+
+  const ext = (file.type && file.type.split('/')[1]) || 'jpg';
+  const key = `patrols/${patrolId}/checkpoint-${checkpointId}-${Date.now()}-${user.id}.${ext}`;
+
+  const buffer = await file.arrayBuffer();
+  await c.env.SENTINEL_R2.put(key, buffer, {
+    httpMetadata: { contentType: file.type || 'image/jpeg' },
+  });
+
+  return c.json({ photo_key: key, photo_url: `/api/patrols/photo/${key}` });
+});
+
+// ─── GET /photo/:key+ ─────────────────────────────────────────────────────
+// Serve an uploaded checkpoint photo from R2.
+app.get('/photo/*', async (c) => {
+  const key = c.req.path.replace('/api/patrols/photo/', '');
+  const obj = await c.env.SENTINEL_R2.get(key);
+  if (!obj) throw new HTTPException(404, { message: 'Photo not found' });
+
+  return new Response(obj.body, {
+    headers: {
+      'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg',
+      'Cache-Control': 'private, max-age=86400',
+    },
+  });
 });
 
 // ─── POST /:id/scan ───────────────────────────────────────────────────────

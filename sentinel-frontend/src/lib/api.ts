@@ -98,7 +98,24 @@ export const patrolApi = {
   currentShift:   () => api.get('/patrols/current-shift'),
   checkpointsDue: (site_id?: number) => api.get(`/patrols/checkpoints-due${site_id ? `?site_id=${site_id}` : ''}`),
   qrLookup:       (qr_code: string) => api.get(`/patrols/qr/${encodeURIComponent(qr_code)}`),
+  uploadPhoto:    (patrolId: number, checkpointId: number, blob: Blob) => uploadCheckpointPhoto(patrolId, checkpointId, blob),
 };
+
+async function uploadCheckpointPhoto(patrolId: number, checkpointId: number, blob: Blob): Promise<{ photo_key: string; photo_url: string }> {
+  const token = getToken();
+  const form = new FormData();
+  form.append('photo', blob, `checkpoint-${checkpointId}.jpg`);
+  form.append('checkpoint_id', String(checkpointId));
+
+  const res = await fetch(`${API_BASE}/patrols/${patrolId}/photo`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Photo upload failed');
+  return data;
+}
 
 // ── Incidents ──────────────────────────────────────────────────────────────
 export const incidentApi = {
