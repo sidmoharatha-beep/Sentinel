@@ -531,4 +531,46 @@ app.delete('/:id', requireRole('system_admin'), async (c) => {
   return c.body(null, 204);
 });
 
+// ─── POST /:id/force-complete ─────────────────────────────────────────────
+app.post('/:id/force-complete', requireRole('system_admin', 'security_manager'), async (c) => {
+  const user = c.get('user') as User;
+  const id = Number(c.req.param('id'));
+  const patrol = await c.env.SENTINEL_DB.prepare('SELECT * FROM patrols WHERE id = ?').bind(id).first<Record<string, any>>();
+  if (!patrol) throw new HTTPException(404, { message: 'Patrol not found' });
+  if (patrol.status === 'completed') throw new HTTPException(400, { message: 'Patrol already completed' });
+  await c.env.SENTINEL_DB.prepare("UPDATE patrols SET status = 'completed', actual_end = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
+  await auditLog(c.env.SENTINEL_DB, { userId: user.id, action: 'patrol_force_complete', description: `Admin force-completed patrol #${id}`, ipAddress: c.req.header('cf-connecting-ip') || '', deviceInfo: c.req.header('user-agent') || '', relatedId: id, relatedType: 'patrol' });
+  return c.json({ success: true });
+});
+
+// ─── GET /checklist-submissions ───────────────────────────────────────────
+app.get('/checklist-submissions', requireRole('system_admin', 'security_manager'), async (c) => {
+  const { site_id, date_from, date_to, patrol_id } = c.req.query();
+  let sql = `
+    SELECT p.id as patrol_id, p.shift, p.status as patrol_status,
+      p.scheduled_start, p.actual_start, p.actual_end,
+      u.full_name as guard_name, u.employee_id as guard_employee_id,
+      s.name as site_name, c.checkpoint_code, c.name as checkpoint_name,
+      c.area_type, pc.status as checkpoint_status, pc.scanned_at,
+      pc.notes as checkpoint_notes, pc.latitude, pc.longitude,
+      ci.category as checklist_category, ci.item_text as checklist_item,
+      cr.response as checklist_response, cr.notes as checklist_notes
+    FROM patrols p
+    LEFT JOIN users u ON p.guard_id = u.id
+    LEFT JOIN sites s ON p.site_id = s.id
+    LEFT JOIN patrol_checkpoints pc ON pc.patrol_id = p.id
+    LEFT JOIN checkpoints c ON pc.checkpoint_id = c.id
+    LEFT JOIN checklist_items ci ON ci.checkpoint_id = c.id
+    LEFT JOIN checklist_responses cr ON cr.patrol_checkpoint_id = pc.id AND cr.checklist_item_id = ci.id
+    WHERE pc.status = 'scanned'
+  `;
+  const params: (string | number)[] = [];
+  if (site_id) { sql += ' AND p.site_id = ?'; params.push(Number(site_id)); }
+  if (patrol_id) { sql += ' AND p.id = ?'; params.push(Number(patrol_id)); }
+  if (date_from) { sql += ' AND p.scheduled_start >= ?'; params.push(date_from); }
+  if (date_to) { sql += ' AND p.scheduled_start <= ?'; params.push(date_to); }
+  sql += ' ORDER BY p.scheduled_start DESC, c.checkpoint_code ASC';
+  const rows = await c.env.SENTINEL_DB.prepare(sql).bind(...params).all<Record<string, any>>();
+  return c.json({ submissions: rows.results ?? [], count: (rows.results ?? []).length });
+});
 export default app;
