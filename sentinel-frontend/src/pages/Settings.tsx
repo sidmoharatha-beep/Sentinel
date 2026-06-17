@@ -690,9 +690,8 @@ export default function Settings() {
                 <h3 className="text-sm font-semibold text-primary mb-4">Patrol Frequency by Area Type</h3>
                 <div className="space-y-3">
                   {[
-                    { type: 'Critical',    freq: '1 hour',  desc: 'Production, LPG Yard, Tank Farm, Pump Station, Fire Station, Control Unit, Main Gate', color: 'text-red-600 bg-red-50 border-red-200' },
-                    { type: 'Operational', freq: '2 hours', desc: 'Electrical Substation, Warehouse, Water Treatment, Office Block, Marine Jetty, Rail/Road Dispatch', color: 'text-blue-600 bg-blue-50 border-blue-200' },
-                    { type: 'Support',     freq: '4 hours', desc: 'Medical Centre, Canteen, Perimeter East, Administrative Block', color: 'text-gray-600 bg-gray-50 border-gray-200' },
+                    { type: 'Critical',    freq: '1 hour',  desc: 'Veg Oil Yard, LPG Yard, Loading Point, Process Entrance', color: 'text-red-600 bg-red-50 border-red-200' },
+                    { type: 'Operational', freq: '2 hours', desc: 'ETP, Sub Station, Scrap Yard, RM Area, Scrap/Dumping Area, Biscuit Area/Store, FG Stock Yard, FG Dock, PM Dock', color: 'text-blue-600 bg-blue-50 border-blue-200' },
                   ].map(a => (
                     <div key={a.type} className={cn('p-3 rounded-lg border flex items-start gap-3', a.color)}>
                       <div className="shrink-0">
@@ -713,7 +712,7 @@ export default function Settings() {
                   {[
                     ['Version', 'Sentinel v3.0'],
                     ['Site', 'ITC, Khordha'],
-                    ['Total Checkpoints', '17'],
+                    ['Total Checkpoints', '13'],
                     ['Backend', 'Hono + Cloudflare Workers'],
                     ['Auth', 'JWT · Employee ID login'],
                     ['Audit Trail', 'Enabled'],

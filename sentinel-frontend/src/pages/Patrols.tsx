@@ -767,7 +767,7 @@ export default function Patrols() {
                 </p>
               </div>
               <div className="p-3 rounded-xl bg-blue-50 border border-blue-200">
-                <p className="text-xs text-blue-700 font-medium">📍 Site: HPCL Visakh Refinery</p>
+                <p className="text-xs text-blue-700 font-medium">📍 Site: ITC ICML, Khordha</p>
                 <p className="text-xs text-blue-600 mt-1">Date & Time: {new Date().toLocaleString('en-IN')}</p>
               </div>
             </div>
