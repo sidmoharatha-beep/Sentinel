@@ -21,11 +21,12 @@ const SHIFT_COLORS: Record<string, string> = {
 };
 
 const allNavItems = [
-  { label: 'Dashboard',  icon: LayoutDashboard, path: '/',          roles: ['system_admin', 'security_manager', 'security_supervisor', 'security_guard'] },
-  { label: 'Patrols',    icon: ShieldCheck,     path: '/patrols',   roles: ['system_admin', 'security_manager', 'security_supervisor', 'security_guard'] },
-  { label: 'Compliance', icon: ClipboardList,   path: '/compliance',roles: ['system_admin', 'security_manager', 'security_supervisor'] },
-  { label: 'Reports',    icon: FileText,         path: '/reports',   roles: ['system_admin', 'security_manager', 'security_supervisor'] },
-  { label: 'Settings',   icon: Settings,         path: '/settings',  roles: ['system_admin'] },
+  { label: 'Dashboard',   icon: LayoutDashboard, path: '/',          roles: ['system_admin', 'security_manager', 'security_supervisor', 'security_guard'] },
+  { label: 'Patrols',     icon: ShieldCheck,     path: '/patrols',   roles: ['system_admin', 'security_manager', 'security_supervisor', 'security_guard'] },
+  { label: 'Compliance',  icon: ClipboardList,   path: '/compliance',roles: ['system_admin', 'security_manager', 'security_supervisor'] },
+  { label: 'Reports',     icon: FileText,        path: '/reports',   roles: ['system_admin', 'security_manager', 'security_supervisor'] },
+  { label: 'Admin Panel', icon: Settings,        path: '/admin',     roles: ['system_admin'] },
+  { label: 'Settings',    icon: Settings,        path: '/settings',  roles: ['system_admin'] },
 ];
 
 export function Sidebar() {

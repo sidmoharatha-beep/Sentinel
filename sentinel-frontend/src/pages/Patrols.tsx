@@ -219,6 +219,7 @@ export default function Patrols() {
   const [photoDataUrl, setPhotoDataUrl]     = useState<string | null>(null);
   const [photoBlob, setPhotoBlob]           = useState<Blob | null>(null);
   const [photoError, setPhotoError]         = useState('');
+  const [cameraReady, setCameraReady]       = useState(false);
   // front / rear camera toggle
   const [facingMode, setFacingMode]         = useState<'environment'|'user'>('environment');
 
@@ -318,7 +319,7 @@ export default function Patrols() {
     setGpsState('checking'); setGpsCoords(null); setGpsDistance(null);
     setQrError('');
     setChecklistItems([]); setChecklistAnswers({});
-    setPhotoDataUrl(null); setPhotoBlob(null); setPhotoError('');
+    setPhotoDataUrl(null); setPhotoBlob(null); setPhotoError(''); setCameraReady(false);
     setFacingMode('environment');
     // Start GPS immediately
     navigator.geolocation.getCurrentPosition(
@@ -387,25 +388,25 @@ export default function Patrols() {
   async function onQrDetected(scannedCode: string) {
     stopQrCamera();
     if (!scanModal) return;
-    if (scannedCode !== scanModal.qr_code) {
-      setQrError(`Wrong QR — expected "${scanModal.qr_code}" but got "${scannedCode}". Try again.`);
-      return;
-    }
     setQrError('');
-    // ── Load checklist for this checkpoint ──
-    await loadChecklist(scanModal.qr_code);
-    setScanStep('checklist');
-  }
-
-  // Separate function so it can also be called when manually bypassing QR
-  async function loadChecklist(qrCode: string) {
     setLoadingChecklist(true);
     try {
-      const d: any = await patrolApi.qrLookup(qrCode);
-      const items: ChecklistItem[] = d.checkpoint?.checklist_items || [];
-      setChecklistItems(items);
+      const d: any = await patrolApi.qrLookup(scannedCode);
+      if (!d?.checkpoint) {
+        setQrError('QR code not recognised. Scan the correct checkpoint QR.');
+        setLoadingChecklist(false);
+        return;
+      }
+      // Verify it matches the checkpoint we're scanning
+      if (d.checkpoint.id !== scanModal.checkpoint_id) {
+        setQrError(`Wrong checkpoint! You scanned "${d.checkpoint.name}" but this is "${scanModal.checkpoint_name}".`);
+        setLoadingChecklist(false);
+        return;
+      }
+      setChecklistItems(d.checkpoint.checklist_items || []);
+      setScanStep('checklist');
     } catch {
-      setChecklistItems([]);
+      setQrError('QR verification failed. Please try again.');
     } finally {
       setLoadingChecklist(false);
     }
@@ -429,8 +430,7 @@ export default function Patrols() {
 
   // ── Photo camera ─────────────────────────────────────────────────────────
   async function startPhotoCamera(facing: 'environment'|'user' = facingMode) {
-    setPhotoError(''); setPhotoDataUrl(null); setPhotoBlob(null);
-    // Stop any existing stream first
+    setPhotoError(''); setPhotoDataUrl(null); setPhotoBlob(null); setCameraReady(false);
     stopPhotoCamera();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -442,9 +442,12 @@ export default function Patrols() {
       photoStreamRef.current = stream;
       if (photoVideoRef.current) {
         photoVideoRef.current.srcObject = stream;
-        await photoVideoRef.current.play();
+        photoVideoRef.current.onloadedmetadata = () => {
+          photoVideoRef.current?.play();
+          setCameraReady(true);
+        };
       }
-    } catch (err) {
+    } catch {
       setPhotoError('Camera permission denied. Please allow camera access.');
     }
   }
@@ -452,6 +455,7 @@ export default function Patrols() {
   function stopPhotoCamera() {
     photoStreamRef.current?.getTracks().forEach(t => t.stop());
     photoStreamRef.current = null;
+    setCameraReady(false);
     if (photoVideoRef.current) photoVideoRef.current.srcObject = null;
   }
 
@@ -498,7 +502,7 @@ export default function Patrols() {
   }
 
   function retakePhoto() {
-    setPhotoDataUrl(null); setPhotoBlob(null);
+    setPhotoDataUrl(null); setPhotoBlob(null); setCameraReady(false);
     startPhotoCamera(facingMode);
   }
 
@@ -977,16 +981,6 @@ export default function Patrols() {
                       Try Again
                     </button>
                   )}
-                  {/* Dev/fallback: skip QR and load checklist from code */}
-                  <button
-                    onClick={async () => {
-                      stopQrCamera();
-                      await loadChecklist(scanModal.qr_code);
-                      setScanStep('checklist');
-                    }}
-                    className="w-full py-2 text-xs text-text-muted border border-dashed border-border rounded-xl hover:bg-surface-alt">
-                    Skip QR Scan (manual entry)
-                  </button>
                 </div>
               )}
 
@@ -1091,7 +1085,7 @@ export default function Patrols() {
                           </div>
                         )}
                         {/* Camera flip button — top right */}
-                        {photoStreamRef.current && (
+                        {cameraReady && (
                           <button
                             onClick={flipCamera}
                             title="Switch camera"
@@ -1103,7 +1097,7 @@ export default function Patrols() {
                       {photoError && (
                         <p className="text-xs text-red-600 text-center bg-red-50 border border-red-200 rounded-lg p-2">{photoError}</p>
                       )}
-                      {!photoStreamRef.current ? (
+                      {!cameraReady ? (
                         <button onClick={() => startPhotoCamera(facingMode)}
                           className="w-full py-3 bg-accent text-white rounded-xl text-sm font-medium flex items-center justify-center gap-2">
                           <Camera size={16} /> Open Camera
