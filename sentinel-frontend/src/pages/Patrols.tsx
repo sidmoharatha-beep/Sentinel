@@ -4,7 +4,7 @@ import {
   ShieldCheck, Clock, MapPin, QrCode, Play, CheckSquare,
   RefreshCw, AlertCircle, Loader2, X, Navigation, CheckCircle2,
   FileText, TriangleAlert, ChevronDown, ChevronUp, Camera, ScanLine,
-  ThumbsUp, ThumbsDown, RotateCcw, Trash2, Download, FlipHorizontal,
+  ThumbsUp, ThumbsDown, RotateCcw, Trash2, Download,FlipHorizontal,Mic,Square,
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { cn } from '@/lib/utils';
@@ -197,6 +197,8 @@ export default function Patrols() {
   const [scanNote, setScanNote]         = useState('');
   const [scanIncident, setScanIncident] = useState('');
   const [showIncident, setShowIncident] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const [submitting, setSubmitting]     = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
@@ -236,6 +238,53 @@ export default function Patrols() {
   const isGuard      = isRole('security_guard');
   const isSupervisor = isRole('security_supervisor');
   const isManager    = isRole('system_admin', 'security_manager');
+
+function startVoiceRecording() {
+  try {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      showToast('Speech recognition not supported', 'err');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+
+    recognition.lang = 'or-IN';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => setIsRecording(true);
+
+    recognition.onend = () => setIsRecording(false);
+
+    recognition.onerror = () => {
+      setIsRecording(false);
+      showToast('Voice recognition failed', 'err');
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript =
+        event.results[0][0].transcript;
+
+      setScanIncident(prev =>
+        prev ? prev + ' ' + transcript : transcript
+      );
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  } catch {
+    showToast('Unable to start microphone', 'err');
+  }
+}
+
+function stopVoiceRecording() {
+  recognitionRef.current?.stop();
+  setIsRecording(false);
+}
 
   // ── Load ────────────────────────────────────────────────────────────────
   const load = useCallback(() => {
@@ -1161,10 +1210,48 @@ export default function Patrols() {
                       {showIncident ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
                     </button>
                     {showIncident && (
-                      <textarea value={scanIncident} onChange={e => setScanIncident(e.target.value)}
-                        rows={2} placeholder="Describe the incident…"
-                        className="mt-2 w-full border border-red-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-100 resize-none" />
-                    )}
+  <div className="mt-2 space-y-2">
+
+    <textarea
+      value={scanIncident}
+      onChange={e => setScanIncident(e.target.value)}
+      rows={3}
+      placeholder="Describe the incident or speak in Odia..."
+      className="w-full border border-red-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-100 resize-none"
+    />
+
+    <div className="flex gap-2">
+
+      {!isRecording ? (
+        <button
+          type="button"
+          onClick={startVoiceRecording}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500 text-white text-xs font-medium"
+        >
+          <Mic size={14} />
+          Speak Odia
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={stopVoiceRecording}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-black text-white text-xs font-medium animate-pulse"
+        >
+          <Square size={14} />
+          Stop Recording
+        </button>
+      )}
+
+    </div>
+
+    {isRecording && (
+      <p className="text-xs text-red-600">
+        🎤 Listening... Speak your incident in Odia
+      </p>
+    )}
+
+  </div>
+)}
                   </div>
                 </div>
               )}
