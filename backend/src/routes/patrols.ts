@@ -451,7 +451,8 @@ app.post('/:id/scan', requireRole('system_admin', 'security_supervisor', 'securi
   const user = c.get('user') as User;
   const patrolId = Number(c.req.param('id'));
   const body = await c.req.json<Record<string, any>>();
-  const { checkpoint_id, qr_code, notes, latitude, longitude, gps_accuracy, photo_url, checklist_responses } = body;
+  const { checkpoint_id, qr_code, notes, latitude, longitude, gps_accuracy, photo_url,
+          incident_photo_url, mock_gps_flag, offline_queued_at, checklist_responses } = body;
 
   if (!checkpoint_id) throw new HTTPException(400, { message: 'checkpoint_id is required' });
 
@@ -476,9 +477,13 @@ app.post('/:id/scan', requireRole('system_admin', 'security_supervisor', 'securi
   await c.env.SENTINEL_DB
     .prepare(`UPDATE patrol_checkpoints
               SET status = 'scanned', scanned_at = CURRENT_TIMESTAMP, notes = ?,
-                  latitude = ?, longitude = ?, gps_accuracy = ?, photo_url = ?
+                  latitude = ?, longitude = ?, gps_accuracy = ?, photo_url = ?,
+                  incident_photo_url = ?, mock_gps_flag = ?, offline_queued_at = ?
               WHERE id = ?`)
-    .bind(notes ?? null, latitude ?? null, longitude ?? null, gps_accuracy ?? null, photo_url ?? null, pc.id)
+    .bind(
+      notes ?? null, latitude ?? null, longitude ?? null, gps_accuracy ?? null, photo_url ?? null,
+      incident_photo_url ?? null, mock_gps_flag ? 1 : 0, offline_queued_at ?? null, pc.id
+    )
     .run();
 
   if (checklist_responses && Array.isArray(checklist_responses) && checklist_responses.length > 0) {
@@ -493,8 +498,8 @@ app.post('/:id/scan', requireRole('system_admin', 'security_supervisor', 'securi
 
   await auditLog(c.env.SENTINEL_DB, {
     userId: user.id,
-    action: 'qr_scan',
-    description: `Scanned checkpoint ${checkpoint.checkpoint_code} (${checkpoint.name}) in patrol #${patrolId}`,
+    action: mock_gps_flag ? 'qr_scan_suspicious_gps' : 'qr_scan',
+    description: `Scanned checkpoint ${checkpoint.checkpoint_code} (${checkpoint.name}) in patrol #${patrolId}${mock_gps_flag ? ' [FLAGGED: possible mock/fake GPS]' : ''}`,
     ipAddress: c.req.header('cf-connecting-ip') || '',
     deviceInfo: c.req.header('user-agent') || 'unknown',
     relatedId: pc.id,
@@ -521,7 +526,7 @@ app.get('/qr/:qr_code', async (c) => {
     .prepare(`
       SELECT c.*, s.name as site_name,
              json_group_array(
-               json_object('id', ci.id, 'category', ci.category, 'item_text', ci.item_text, 'is_required', ci.is_required)
+               json_object('id', ci.id, 'category', ci.category, 'item_text', ci.item_text, 'item_text_or', ci.item_text_or, 'is_required', ci.is_required)
              ) as checklist_items_json
       FROM checkpoints c
       LEFT JOIN sites s ON c.site_id = s.id

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS checklist_items (
   checkpoint_id INTEGER NOT NULL,
   category TEXT NOT NULL CHECK(category IN ('Security', 'Safety', 'Fire', 'Housekeeping', 'Environmental')),
   item_text TEXT NOT NULL,
+  item_text_or TEXT,
   is_required INTEGER DEFAULT 1,
   sort_order INTEGER DEFAULT 0,
   FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id) ON DELETE CASCADE
@@ -108,6 +109,9 @@ CREATE TABLE IF NOT EXISTS patrol_checkpoints (
   longitude REAL,
   gps_accuracy REAL,
   photo_url TEXT,
+  incident_photo_url TEXT,
+  mock_gps_flag INTEGER DEFAULT 0,
+  offline_queued_at INTEGER,
   UNIQUE(patrol_id, checkpoint_id),
   FOREIGN KEY (patrol_id) REFERENCES patrols(id) ON DELETE CASCADE,
   FOREIGN KEY (checkpoint_id) REFERENCES checkpoints(id)

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="100" fill="#0f172a"/>
+  <!-- Grid lines -->
+  <g opacity="0.07" stroke="#60a5fa" stroke-width="1">
+    <line x1="0" y1="128" x2="512" y2="128"/>
+    <line x1="0" y1="256" x2="512" y2="256"/>
+    <line x1="0" y1="384" x2="512" y2="384"/>
+    <line x1="128" y1="0" x2="128" y2="512"/>
+    <line x1="256" y1="0" x2="256" y2="512"/>
+    <line x1="384" y1="0" x2="384" y2="512"/>
+  </g>
+  <!-- Shield -->
+  <path d="M256 60 L420 120 L420 280 Q420 390 256 450 Q92 390 92 280 L92 120 Z" fill="#1e3a5f" stroke="#3b82f6" stroke-width="3"/>
+  <!-- Shield inner -->
+  <path d="M256 82 L400 138 L400 278 Q400 375 256 428 Q112 375 112 278 L112 138 Z" fill="none" stroke="#60a5fa" stroke-width="1.5" opacity="0.4"/>
+  <!-- Scan lines -->
+  <line x1="112" y1="240" x2="400" y2="240" stroke="#3b82f6" stroke-width="2" opacity="0.6"/>
+  <line x1="112" y1="265" x2="400" y2="265" stroke="#60a5fa" stroke-width="1" opacity="0.3"/>
+  <line x1="112" y1="290" x2="400" y2="290" stroke="#3b82f6" stroke-width="2" opacity="0.6"/>
+  <!-- S letterform -->
+  <path d="M186 175 Q186 148 210 148 L306 148 Q330 148 330 172 Q330 196 306 196 L214 196 Q190 196 190 220 Q190 244 214 244 L308 244 Q332 244 332 268 Q332 292 308 292 L210 292 Q186 292 186 268" fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round"/>
+  <!-- Green pulse dot -->
+  <circle cx="370" cy="370" r="18" fill="#22c55e"/>
+  <circle cx="370" cy="370" r="28" fill="none" stroke="#22c55e" stroke-width="3" opacity="0.5"/>
+</svg>

@@ -4,9 +4,11 @@ import {
   ShieldCheck, Clock, MapPin, QrCode, Play, CheckSquare,
   RefreshCw, AlertCircle, Loader2, X, Navigation, CheckCircle2,
   FileText, TriangleAlert, ChevronDown, ChevronUp, Camera, ScanLine,
-  ThumbsUp, ThumbsDown, RotateCcw, Trash2, Download,FlipHorizontal,Mic,Square,
+  ThumbsUp, ThumbsDown, RotateCcw, Trash2, Download, FlipHorizontal,
+  Mic, MicOff, WifiOff, ShieldAlert, ImagePlus,
 } from 'lucide-react';
 import jsQR from 'jsqr';
+import { queueOfflineScan, getQueuedScanCount, syncQueuedScans } from '@/lib/offlineQueue';
 import { cn } from '@/lib/utils';
 import { patrolApi, api } from '@/lib/api';
 import { useAuth } from '@/lib/AuthContext';
@@ -39,6 +41,44 @@ function distanceM(lat1: number, lon1: number, lat2: number, lon2: number) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ── Free heuristic mock-location detector ──────────────────────────────────
+// The browser Geolocation API does not expose Android's isFromMockProvider()
+// flag (that needs a native plugin). Instead we use free heuristics that
+// catch the overwhelming majority of "fake GPS" apps:
+//   1. Suspiciously perfect accuracy (mock apps often report exactly 1-5m,
+//      or exactly 0, which real GPS chips almost never do)
+//   2. Zero altitude/speed/heading reported together with high accuracy
+//      (real device sensors usually report partial/noisy values)
+//   3. Impossible speed between two consecutive scans (teleporting)
+let lastMockCheckCoord: { lat: number; lon: number; t: number } | null = null;
+function isLikelyMockLocation(pos: GeolocationPosition): boolean {
+  const { accuracy, altitude, altitudeAccuracy, heading, speed, latitude, longitude } = pos.coords;
+  let suspicionScore = 0;
+
+  // Heuristic 1: too-perfect accuracy values common in fake GPS apps
+  if (accuracy === 0 || accuracy === 1 || accuracy === 5 || accuracy === 10) suspicionScore++;
+
+  // Heuristic 2: all auxiliary sensor fields null/zero at once (common in spoofers,
+  // real devices almost always report at least one non-null/non-zero field)
+  if (altitude === null && altitudeAccuracy === null && heading === null && (speed === null || speed === 0)) {
+    suspicionScore++;
+  }
+
+  // Heuristic 3: impossible jump speed since last check (teleport detection)
+  const now = Date.now();
+  if (lastMockCheckCoord) {
+    const dt = (now - lastMockCheckCoord.t) / 1000; // seconds
+    if (dt > 0 && dt < 120) {
+      const d = distanceM(lastMockCheckCoord.lat, lastMockCheckCoord.lon, latitude, longitude);
+      const speedKmh = (d / dt) * 3.6;
+      if (speedKmh > 300) suspicionScore += 2; // faster than a commercial aircraft taxi — impossible on foot/vehicle
+    }
+  }
+  lastMockCheckCoord = { lat: latitude, lon: longitude, t: now };
+
+  return suspicionScore >= 2;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────
@@ -82,6 +122,7 @@ interface ChecklistItem {
   id: number;
   category: string;
   item_text: string;
+  item_text_or?: string | null;
   is_required: number;
 }
 
@@ -196,9 +237,15 @@ export default function Patrols() {
   const [gpsDistance, setGpsDistance]   = useState<number|null>(null);
   const [scanNote, setScanNote]         = useState('');
   const [scanIncident, setScanIncident] = useState('');
-  const [showIncident, setShowIncident] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
+  const [isListening, setIsListening]   = useState(false);
+  const [voiceError, setVoiceError]     = useState('');
   const recognitionRef = useRef<any>(null);
+  const [incidentPhotoDataUrl, setIncidentPhotoDataUrl] = useState<string | null>(null);
+  const [incidentPhotoBlob, setIncidentPhotoBlob]       = useState<Blob | null>(null);
+  const [isOnline, setIsOnline]         = useState(navigator.onLine);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [mockGpsWarning, setMockGpsWarning]     = useState(false);
+  const [showIncident, setShowIncident] = useState(false);
   const [submitting, setSubmitting]     = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
@@ -239,53 +286,6 @@ export default function Patrols() {
   const isSupervisor = isRole('security_supervisor');
   const isManager    = isRole('system_admin', 'security_manager');
 
-function startVoiceRecording() {
-  try {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      showToast('Speech recognition not supported', 'err');
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-
-    recognition.lang = 'or-IN';
-    recognition.continuous = false;
-    recognition.interimResults = false;
-
-    recognition.onstart = () => setIsRecording(true);
-
-    recognition.onend = () => setIsRecording(false);
-
-    recognition.onerror = () => {
-      setIsRecording(false);
-      showToast('Voice recognition failed', 'err');
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript =
-        event.results[0][0].transcript;
-
-      setScanIncident(prev =>
-        prev ? prev + ' ' + transcript : transcript
-      );
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-  } catch {
-    showToast('Unable to start microphone', 'err');
-  }
-}
-
-function stopVoiceRecording() {
-  recognitionRef.current?.stop();
-  setIsRecording(false);
-}
-
   // ── Load ────────────────────────────────────────────────────────────────
   const load = useCallback(() => {
     setLoading(true); setError('');
@@ -295,6 +295,39 @@ function stopVoiceRecording() {
       .finally(() => setLoading(false));
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // ── Offline queue: sync when connection returns ─────────────────────────
+  const refreshPendingSyncCount = useCallback(() => {
+    getQueuedScanCount().then(setPendingSyncCount).catch(() => {});
+  }, []);
+
+  const runSync = useCallback(async () => {
+    const result = await syncQueuedScans(
+      (patrolId, checkpointId, blob) => patrolApi.uploadPhoto(patrolId, checkpointId, blob),
+      (patrolId, body) => (api.post as any)(`/patrols/${patrolId}/scan`, body)
+    );
+    refreshPendingSyncCount();
+    if (result.synced > 0) {
+      showToast(`☁️ Synced ${result.synced} offline scan${result.synced > 1 ? 's' : ''}`);
+      if (activePatrol) {
+        patrolApi.get(activePatrol.id).then((d: any) => setPatrolCheckpoints(d.checkpoints || [])).catch(() => {});
+      }
+    }
+  }, [activePatrol]);
+
+  useEffect(() => {
+    refreshPendingSyncCount();
+    const handleOnline = () => { setIsOnline(true); runSync(); };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    // Also attempt a sync on initial load in case scans were queued in a previous session
+    if (navigator.onLine) runSync();
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [refreshPendingSyncCount, runSync]);
 
   function showToast(msg: string, type: 'ok'|'err' = 'ok') {
     setToast(msg); setToastType(type);
@@ -362,6 +395,14 @@ function stopVoiceRecording() {
   }
 
   // ── Open scan modal ───────────────────────────────────────────────────────
+  function checkMockLocation(pos: GeolocationPosition) {
+    if (isLikelyMockLocation(pos)) {
+      setMockGpsWarning(true);
+    } else {
+      setMockGpsWarning(false);
+    }
+  }
+
   function openScanModal(cp: PatrolCheckpoint) {
     setScanModal(cp); setScanStep('gps');
     setScanNote(''); setScanIncident(''); setShowIncident(false);
@@ -377,7 +418,8 @@ function stopVoiceRecording() {
         setGpsCoords({ lat, lon });
         const dist = distanceM(lat, lon, cp.latitude, cp.longitude);
         setGpsDistance(Math.round(dist));
-        setGpsState(dist <= 20 ? 'ok' : 'far'); // 150m threshold (generous for mobile GPS drift)
+        setGpsState(dist <= 20 ? 'ok' : 'far');
+        checkMockLocation(pos);
       },
       () => setGpsState('error'),
       { enableHighAccuracy: true, timeout: 12000 }
@@ -386,7 +428,73 @@ function stopVoiceRecording() {
 
   function closeScanModal() {
     stopQrCamera(); stopPhotoCamera();
+    if (recognitionRef.current) { try { recognitionRef.current.stop(); } catch {} }
+    setIsListening(false); setVoiceError('');
+    setIncidentPhotoDataUrl(null); setIncidentPhotoBlob(null);
+    setMockGpsWarning(false);
     setScanModal(null);
+  }
+
+  // ── Voice input (Odia speech → text via free browser Web Speech API) ────
+  // 100% free, built into Chrome/Android — no external service or API key.
+  // Falls back gracefully with a message if unsupported (e.g. desktop Firefox).
+  function toggleVoiceInput() {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceError('Voice input is not supported on this browser. Please type the incident instead.');
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+    setVoiceError('');
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'or-IN'; // Odia (India)
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript as string;
+      // Odia speech recognised as Odia script text. We append it to the
+      // incident box as-is (guard can review/edit) — free on-device/Google
+      // speech recognition already does the Odia transcription for us.
+      setScanIncident(prev => (prev ? prev + ' ' : '') + transcript);
+    };
+    recognition.onerror = (event: any) => {
+      if (event.error === 'no-speech') {
+        setVoiceError('No speech detected. Please try again.');
+      } else if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setVoiceError('Microphone permission denied. Please allow microphone access.');
+      } else {
+        setVoiceError('Voice recognition failed. Please try again or type instead.');
+      }
+      setIsListening(false);
+    };
+    recognition.onend = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }
+
+  // ── Incident photo (optional, separate from mandatory checkpoint photo) ──
+  function captureIncidentPhoto() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.capture = 'environment'; // forces camera, not gallery, on supporting mobile browsers
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setIncidentPhotoBlob(file);
+      const reader = new FileReader();
+      reader.onload = () => setIncidentPhotoDataUrl(reader.result as string);
+      reader.readAsDataURL(file);
+    };
+    input.click();
   }
 
   // ── QR camera ────────────────────────────────────────────────────────────
@@ -471,6 +579,7 @@ function stopVoiceRecording() {
         const dist = distanceM(lat, lon, scanModal.latitude, scanModal.longitude);
         setGpsDistance(Math.round(dist));
         setGpsState(dist <= 20 ? 'ok' : 'far');
+        checkMockLocation(pos);
       },
       () => setGpsState('error'),
       { enableHighAccuracy: true, timeout: 12000 }
@@ -555,24 +664,56 @@ function stopVoiceRecording() {
     startPhotoCamera(facingMode);
   }
 
-  // ── Submit scan ───────────────────────────────────────────────────────────
+  // ── Submit scan (with offline queueing) ─────────────────────────────────────
   async function submitScan() {
     if (!scanModal || !activePatrol) return;
     if (!photoBlob) { showToast('Photo is required before submitting', 'err'); return; }
     setSubmitting(true);
+
+    const combinedNotes = [scanNote, scanIncident ? `Incident: ${scanIncident}` : null]
+      .filter(Boolean).join(' | ') || null;
+    const checklist_responses = checklistItems.map(item => ({
+      checklist_item_id: item.id,
+      response: checklistAnswers[item.id] || 'na',
+      notes: null,
+    }));
+
+    // If offline, queue everything locally (photos as base64) and sync later
+    if (!navigator.onLine) {
+      try {
+        await queueOfflineScan({
+          patrolId: activePatrol.id,
+          checkpointId: scanModal.checkpoint_id,
+          checkpointName: scanModal.checkpoint_name,
+          notes: combinedNotes,
+          latitude: gpsCoords?.lat ?? null,
+          longitude: gpsCoords?.lon ?? null,
+          mockGpsFlag: mockGpsWarning,
+          checklist_responses,
+          photoBlob,
+          incidentPhotoBlob,
+          queuedAt: Date.now(),
+        });
+        closeScanModal();
+        showToast(`📴 Saved offline — will sync when network returns (${scanModal.checkpoint_name})`);
+        refreshPendingSyncCount();
+      } catch (e: any) {
+        showToast(`Could not save offline: ${e.message}`, 'err');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     try {
       setUploadingPhoto(true);
       const photoResult = await patrolApi.uploadPhoto(activePatrol.id, scanModal.checkpoint_id, photoBlob);
+      let incidentPhotoUrl: string | null = null;
+      if (incidentPhotoBlob) {
+        const incidentUpload = await patrolApi.uploadPhoto(activePatrol.id, scanModal.checkpoint_id, incidentPhotoBlob);
+        incidentPhotoUrl = incidentUpload.photo_url;
+      }
       setUploadingPhoto(false);
-
-      const checklist_responses = checklistItems.map(item => ({
-        checklist_item_id: item.id,
-        response: checklistAnswers[item.id] || 'na',
-        notes: null,
-      }));
-
-      const combinedNotes = [scanNote, scanIncident ? `Incident: ${scanIncident}` : null]
-        .filter(Boolean).join(' | ') || null;
 
       await (api.post as any)(`/patrols/${activePatrol.id}/scan`, {
         checkpoint_id: scanModal.checkpoint_id,
@@ -580,6 +721,8 @@ function stopVoiceRecording() {
         latitude: gpsCoords?.lat,
         longitude: gpsCoords?.lon,
         photo_url: photoResult.photo_url,
+        incident_photo_url: incidentPhotoUrl,
+        mock_gps_flag: mockGpsWarning ? 1 : 0,
         checklist_responses,
       });
 
@@ -634,6 +777,18 @@ function stopVoiceRecording() {
         )}>
           {toast}
           <button onClick={() => setToast('')}><X size={14} /></button>
+        </div>
+      )}
+
+      {/* Offline / pending sync banner */}
+      {(!isOnline || pendingSyncCount > 0) && (
+        <div className={cn('mb-4 px-4 py-2.5 rounded-xl border flex items-center gap-2 text-xs font-medium',
+          !isOnline ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-blue-50 border-blue-200 text-blue-700'
+        )}>
+          {!isOnline ? <WifiOff size={14} /> : <RefreshCw size={14} className="animate-spin" />}
+          {!isOnline
+            ? `No network connection — patrol scans will be saved on this device and uploaded automatically once you're back online.${pendingSyncCount > 0 ? ` (${pendingSyncCount} scan${pendingSyncCount > 1 ? 's' : ''} waiting)` : ''}`
+            : `Syncing ${pendingSyncCount} offline scan${pendingSyncCount > 1 ? 's' : ''}…`}
         </div>
       )}
 
@@ -985,6 +1140,17 @@ function stopVoiceRecording() {
                         <button onClick={retryGps} className="mt-3 text-xs bg-orange-100 text-orange-600 px-3 py-1.5 rounded-lg">Retry</button></>
                     )}
                   </div>
+                  {mockGpsWarning && (
+                    <div className="p-3 rounded-xl border-2 border-amber-400 bg-amber-50 flex items-start gap-2">
+                      <ShieldAlert size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-xs font-bold text-amber-800">Suspicious location detected</p>
+                        <p className="text-[11px] text-amber-700 mt-0.5">
+                          This device's GPS reading looks like it may be coming from a fake/mock location app. Please disable any GPS spoofing app and "Mock Location" in Developer Options before scanning. This attempt has been flagged for review.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                   {gpsState === 'ok' && (
                     <button onClick={() => setScanStep('qr')}
                       className="w-full py-3 bg-accent text-white rounded-xl text-sm font-medium flex items-center justify-center gap-2">
@@ -1071,6 +1237,9 @@ function stopVoiceRecording() {
                                 <p className="text-xs text-primary flex-1 pr-3">
                                   {item.item_text}
                                   {item.is_required ? <span className="text-red-500 ml-0.5">*</span> : null}
+                                  {item.item_text_or && (
+                                    <span className="block text-[11px] text-text-muted mt-0.5">{item.item_text_or}</span>
+                                  )}
                                 </p>
                                 <div className="flex gap-1.5 shrink-0">
                                   <button
@@ -1210,48 +1379,45 @@ function stopVoiceRecording() {
                       {showIncident ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
                     </button>
                     {showIncident && (
-  <div className="mt-2 space-y-2">
+                      <div className="mt-2 space-y-2">
+                        <div className="relative">
+                          <textarea value={scanIncident} onChange={e => setScanIncident(e.target.value)}
+                            rows={3} placeholder="Describe the incident… or tap the mic and speak in Odia"
+                            className="w-full border border-red-200 rounded-lg px-3 py-2 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-red-100 resize-none" />
+                          <button
+                            type="button"
+                            onClick={toggleVoiceInput}
+                            title={isListening ? 'Stop recording' : 'Speak in Odia'}
+                            className={cn('absolute right-2 top-2 p-1.5 rounded-full transition-colors',
+                              isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-red-50 text-red-600 hover:bg-red-100'
+                            )}>
+                            {isListening ? <MicOff size={14} /> : <Mic size={14} />}
+                          </button>
+                        </div>
+                        {isListening && (
+                          <p className="text-[11px] text-red-600 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> Listening… speak in Odia, tap mic again to stop
+                          </p>
+                        )}
+                        {voiceError && <p className="text-[11px] text-amber-600">{voiceError}</p>}
 
-    <textarea
-      value={scanIncident}
-      onChange={e => setScanIncident(e.target.value)}
-      rows={3}
-      placeholder="Describe the incident or speak in Odia..."
-      className="w-full border border-red-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-100 resize-none"
-    />
-
-    <div className="flex gap-2">
-
-      {!isRecording ? (
-        <button
-          type="button"
-          onClick={startVoiceRecording}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500 text-white text-xs font-medium"
-        >
-          <Mic size={14} />
-          Speak Odia
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={stopVoiceRecording}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-black text-white text-xs font-medium animate-pulse"
-        >
-          <Square size={14} />
-          Stop Recording
-        </button>
-      )}
-
-    </div>
-
-    {isRecording && (
-      <p className="text-xs text-red-600">
-        🎤 Listening... Speak your incident in Odia
-      </p>
-    )}
-
-  </div>
-)}
+                        {/* Optional incident photo */}
+                        {!incidentPhotoDataUrl ? (
+                          <button type="button" onClick={captureIncidentPhoto}
+                            className="flex items-center gap-1.5 text-xs text-red-600 border border-dashed border-red-300 rounded-lg px-3 py-2 hover:bg-red-50">
+                            <ImagePlus size={13} /> Attach incident photo (optional)
+                          </button>
+                        ) : (
+                          <div className="relative inline-block">
+                            <img src={incidentPhotoDataUrl} alt="Incident" className="h-20 rounded-lg border border-red-200" />
+                            <button type="button" onClick={() => { setIncidentPhotoDataUrl(null); setIncidentPhotoBlob(null); }}
+                              className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full p-1">
+                              <X size={10} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
