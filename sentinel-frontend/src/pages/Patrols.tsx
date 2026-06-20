@@ -10,7 +10,7 @@ import {
 import jsQR from 'jsqr';
 import { queueOfflineScan, getQueuedScanCount, syncQueuedScans } from '@/lib/offlineQueue';
 import { cn } from '@/lib/utils';
-import { patrolApi, api } from '@/lib/api';
+import { patrolApi, api, incidentApi } from '@/lib/api';
 import { useAuth } from '@/lib/AuthContext';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -245,6 +245,9 @@ export default function Patrols() {
   const [isOnline, setIsOnline]         = useState(navigator.onLine);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [mockGpsWarning, setMockGpsWarning]     = useState(false);
+  const [showSosConfirm, setShowSosConfirm]     = useState(false);
+  const [sosSending, setSosSending]             = useState(false);
+  const [sosSent, setSosSent]                   = useState(false);
   const [showIncident, setShowIncident] = useState(false);
   const [submitting, setSubmitting]     = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -424,6 +427,43 @@ export default function Patrols() {
       () => setGpsState('error'),
       { enableHighAccuracy: true, timeout: 12000 }
     );
+  }
+
+  // ── SOS / Panic button ───────────────────────────────────────────────────
+  // One-tap emergency report: captures GPS once (only at the moment of
+  // emergency — no continuous tracking) and immediately raises a Critical
+  // incident visible to supervisors/managers on the dashboard.
+  async function sendSOS() {
+    setSosSending(true);
+    try {
+      let lat: number | null = null, lon: number | null = null;
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
+          navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 })
+        );
+        lat = pos.coords.latitude; lon = pos.coords.longitude;
+      } catch { /* proceed without location if it fails — emergency report still goes out */ }
+
+      await incidentApi.create({
+        site_id: 1,
+        guard_id: user?.id,
+        patrol_id: activePatrol?.id ?? null,
+        category: 'Security',
+        severity: 'Critical',
+        title: `SOS — Emergency raised by ${user?.full_name || 'Guard'}`,
+        description: 'Guard pressed the emergency SOS button. Immediate attention required.',
+        latitude: lat,
+        longitude: lon,
+      });
+      setSosSent(true);
+      setShowSosConfirm(false);
+      showToast('🚨 SOS sent — supervisor and manager notified');
+      setTimeout(() => setSosSent(false), 8000);
+    } catch (e: any) {
+      showToast(`SOS failed to send: ${e.message}. Please call your supervisor directly.`, 'err');
+    } finally {
+      setSosSending(false);
+    }
   }
 
   function closeScanModal() {
@@ -1530,6 +1570,50 @@ export default function Patrols() {
               <button onClick={() => window.print()}
                 className="w-full py-2.5 text-sm bg-primary text-white rounded-xl hover:bg-primary/90 transition-colors">
                 🖨️ Print All QR Codes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SOS / Panic Button (guards & supervisors only) ─────────────── */}
+      {(isGuard || isSupervisor) && !scanModal && (
+        <button
+          onClick={() => setShowSosConfirm(true)}
+          aria-label="Emergency SOS"
+          className={cn(
+            'fixed bottom-20 right-4 sm:bottom-6 z-50 rounded-full shadow-2xl flex items-center justify-center transition-all',
+            sosSent ? 'w-14 h-14 bg-green-600' : 'w-16 h-16 bg-red-600 hover:bg-red-700 active:scale-95'
+          )}>
+          {sosSent ? <CheckCircle2 size={26} className="text-white" /> : (
+            <span className="flex flex-col items-center text-white">
+              <ShieldAlert size={22} />
+              <span className="text-[9px] font-bold tracking-wide mt-0.5">SOS</span>
+            </span>
+          )}
+        </button>
+      )}
+
+      {/* SOS confirmation */}
+      {showSosConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 text-center">
+            <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-3">
+              <ShieldAlert size={30} className="text-red-600" />
+            </div>
+            <h3 className="font-bold text-primary text-lg">Send Emergency SOS?</h3>
+            <p className="text-xs text-text-muted mt-2">
+              This will immediately alert your supervisor and security manager with your current location. Only use this in a genuine emergency.
+            </p>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setShowSosConfirm(false)} disabled={sosSending}
+                className="flex-1 py-2.5 text-sm border border-border rounded-xl hover:bg-surface-alt disabled:opacity-50">
+                Cancel
+              </button>
+              <button onClick={sendSOS} disabled={sosSending}
+                className="flex-1 py-2.5 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 flex items-center justify-center gap-2 disabled:opacity-50 font-semibold">
+                {sosSending ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
+                {sosSending ? 'Sending…' : 'Confirm SOS'}
               </button>
             </div>
           </div>

@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, ShieldCheck, ClipboardList,
+  LayoutDashboard, ShieldCheck, ClipboardList, ShieldAlert,
   FileText, Settings, Menu, X, LogOut, ChevronRight,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -25,6 +25,7 @@ const allNavItems = [
   { label: 'Patrols',     icon: ShieldCheck,     path: '/patrols',   roles: ['system_admin', 'security_manager', 'security_supervisor', 'security_guard'] },
   { label: 'Compliance',  icon: ClipboardList,   path: '/compliance',roles: ['system_admin', 'security_manager', 'security_supervisor'] },
   { label: 'Reports',     icon: FileText,        path: '/reports',   roles: ['system_admin', 'security_manager', 'security_supervisor'] },
+  { label: 'Live Site',    icon: ShieldAlert,     path: '/live-site', roles: ['system_admin', 'security_manager', 'security_supervisor'] },
   { label: 'Admin Panel', icon: Settings,        path: '/admin',     roles: ['system_admin'] },
   { label: 'Settings',    icon: Settings,        path: '/settings',  roles: ['system_admin'] },
 ];

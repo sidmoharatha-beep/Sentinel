@@ -84,6 +84,8 @@ export const dashboardApi = {
   incidentStats:  (days = 7) => api.get(`/dashboard/incident-stats?days=${days}`),
   guardPerformance:(days = 30) => api.get(`/dashboard/guard-performance?days=${days}`),
   topRiskAreas:   (days = 30) => api.get(`/dashboard/top-risk-areas?days=${days}`),
+  anomalies:      (staleMinutes = 90) => api.get(`/dashboard/anomalies?stale_minutes=${staleMinutes}`),
+  photoTimeline:  (date?: string, guardId?: number) => api.get(`/dashboard/photo-timeline?${new URLSearchParams({ ...(date ? { date } : {}), ...(guardId ? { guard_id: String(guardId) } : {}) })}`),
 };
 
 // ── Patrols ────────────────────────────────────────────────────────────────

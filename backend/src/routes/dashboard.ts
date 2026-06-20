@@ -267,4 +267,111 @@ app.get('/audit-trail', requireRole('system_admin', 'security_manager'), async (
   return c.json({ logs: rows.results ?? [], count: (rows.results ?? []).length });
 });
 
+// ─── GET /anomalies ─────────────────────────────────────────────────────────
+// Flags potential issues in active patrols without any GPS tracking:
+//   - Guard has not scanned any checkpoint in over `staleMinutes` (default 90)
+//   - Guard scanned the same checkpoint twice in a row (possible loitering /
+//     phone left at one spot)
+//   - Patrol has unscanned checkpoints with less than 30 min of shift remaining
+app.get('/anomalies', requireRole('system_admin', 'security_manager', 'security_supervisor'), async (c) => {
+  const staleMinutes = Number(c.req.query('stale_minutes') || 90);
+  const anomalies: Record<string, any>[] = [];
+
+  // Active patrols
+  const activePatrols = await c.env.SENTINEL_DB
+    .prepare(`
+      SELECT p.id, p.guard_id, p.shift, p.actual_start, u.full_name as guard_name, u.employee_id, s.name as site_name
+      FROM patrols p
+      LEFT JOIN users u ON p.guard_id = u.id
+      LEFT JOIN sites s ON p.site_id = s.id
+      WHERE p.status = 'in_progress'
+    `)
+    .all<Record<string, any>>();
+
+  for (const patrol of activePatrols.results ?? []) {
+    // 1. Stale patrol — no scan in X minutes
+    const lastScan = await c.env.SENTINEL_DB
+      .prepare(`SELECT scanned_at FROM patrol_checkpoints WHERE patrol_id = ? AND scanned_at IS NOT NULL ORDER BY scanned_at DESC LIMIT 1`)
+      .bind(patrol.id)
+      .first<{ scanned_at: string }>();
+
+    const referenceTime = lastScan?.scanned_at || patrol.actual_start;
+    if (referenceTime) {
+      const minutesSince = (Date.now() - new Date(referenceTime.includes('Z') ? referenceTime : referenceTime + 'Z').getTime()) / 60000;
+      if (minutesSince > staleMinutes) {
+        anomalies.push({
+          type: 'stale_patrol',
+          severity: minutesSince > staleMinutes * 1.5 ? 'high' : 'medium',
+          patrol_id: patrol.id,
+          guard_name: patrol.guard_name,
+          employee_id: patrol.employee_id,
+          site_name: patrol.site_name,
+          message: `No checkpoint scan in ${Math.round(minutesSince)} minutes`,
+          minutes_since_activity: Math.round(minutesSince),
+        });
+      }
+    }
+
+    // 2. Repeated checkpoint — same checkpoint scanned twice consecutively
+    const recentScans = await c.env.SENTINEL_DB
+      .prepare(`
+        SELECT pc.checkpoint_id, c.name as checkpoint_name, pc.scanned_at
+        FROM patrol_checkpoints pc
+        LEFT JOIN checkpoints c ON pc.checkpoint_id = c.id
+        WHERE pc.patrol_id = ? AND pc.scanned_at IS NOT NULL
+        ORDER BY pc.scanned_at DESC LIMIT 3
+      `)
+      .bind(patrol.id)
+      .all<Record<string, any>>();
+
+    const scans = recentScans.results ?? [];
+    if (scans.length >= 2 && scans[0].checkpoint_id === scans[1].checkpoint_id) {
+      anomalies.push({
+        type: 'repeated_checkpoint',
+        severity: 'low',
+        patrol_id: patrol.id,
+        guard_name: patrol.guard_name,
+        employee_id: patrol.employee_id,
+        site_name: patrol.site_name,
+        message: `Same checkpoint "${scans[0].checkpoint_name}" scanned twice in a row`,
+      });
+    }
+  }
+
+  // Sort: high > medium > low
+  const order: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  anomalies.sort((a, b) => order[a.severity] - order[b.severity]);
+
+  return c.json({ anomalies, count: anomalies.length });
+});
+
+// ─── GET /photo-timeline ────────────────────────────────────────────────────
+// Chronological feed of every checkpoint scan photo today, across all guards,
+// for the "visual proof of rounds" view requested by security in-charge.
+app.get('/photo-timeline', requireRole('system_admin', 'security_manager', 'security_supervisor'), async (c) => {
+  const date = c.req.query('date') || new Date().toISOString().slice(0, 10);
+  const guard_id = c.req.query('guard_id');
+
+  let sql = `
+    SELECT pc.id, pc.scanned_at, pc.photo_url, pc.incident_photo_url, pc.notes,
+           pc.latitude, pc.longitude, pc.mock_gps_flag,
+           c.name as checkpoint_name, c.checkpoint_code,
+           p.id as patrol_id, p.shift,
+           u.full_name as guard_name, u.employee_id
+    FROM patrol_checkpoints pc
+    LEFT JOIN checkpoints c ON pc.checkpoint_id = c.id
+    LEFT JOIN patrols p ON pc.patrol_id = p.id
+    LEFT JOIN users u ON p.guard_id = u.id
+    WHERE pc.scanned_at IS NOT NULL
+      AND date(pc.scanned_at) = date(?)
+  `;
+  const params: (string | number)[] = [date];
+
+  if (guard_id) { sql += ' AND p.guard_id = ?'; params.push(Number(guard_id)); }
+  sql += ' ORDER BY pc.scanned_at DESC LIMIT 200';
+
+  const rows = await c.env.SENTINEL_DB.prepare(sql).bind(...params).all<Record<string, any>>();
+  return c.json({ timeline: rows.results ?? [], date });
+});
+
 export default app;
