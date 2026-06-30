@@ -475,49 +475,58 @@ export default function Patrols() {
     setScanModal(null);
   }
 
-  // ── Voice input (Odia speech → text via free browser Web Speech API) ────
-  // 100% free, built into Chrome/Android — no external service or API key.
-  // Falls back gracefully with a message if unsupported (e.g. desktop Firefox).
+  // ── Voice input (Groq Whisper + Llama 3.1 — Odia → AI-analyzed incident) ─
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef   = useRef<Blob[]>([]);
+  const [aiAnalysis, setAiAnalysis]           = useState<any>(null);
+  const [processingVoice, setProcessingVoice] = useState(false);
+
   function toggleVoiceInput() {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setVoiceError('Voice input is not supported on this browser. Please type the incident instead.');
-      return;
-    }
     if (isListening) {
-      recognitionRef.current?.stop();
+      mediaRecorderRef.current?.stop();
       setIsListening(false);
       return;
     }
-    setVoiceError('');
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'or-IN'; // Odia (India)
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript as string;
-      // Odia speech recognised as Odia script text. We append it to the
-      // incident box as-is (guard can review/edit) — free on-device/Google
-      // speech recognition already does the Odia transcription for us.
-      setScanIncident(prev => (prev ? prev + ' ' : '') + transcript);
-    };
-    recognition.onerror = (event: any) => {
-      if (event.error === 'no-speech') {
-        setVoiceError('No speech detected. Please try again.');
-      } else if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setVoiceError('Microphone permission denied. Please allow microphone access.');
-      } else {
-        setVoiceError('Voice recognition failed. Please try again or type instead.');
-      }
-      setIsListening(false);
-    };
-    recognition.onend = () => setIsListening(false);
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
+    setVoiceError(''); setAiAnalysis(null);
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        audioChunksRef.current = [];
+        recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+        recorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          setIsListening(false);
+          const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          if (blob.size < 500) { setVoiceError('No audio detected. Please try again.'); return; }
+          setProcessingVoice(true);
+          const reader = new FileReader();
+          reader.onload = async () => {
+            const base64 = (reader.result as string).split(',')[1];
+            try {
+              const res: any = await (api.post as any)('/voice-to-incident', { audio_base64: base64, mime_type: 'audio/webm' });
+              if (res.analysis) {
+                setAiAnalysis(res.analysis);
+                setScanIncident(res.analysis.english || res.transcript_odia || '');
+              } else if (res.transcript_odia) {
+                setScanIncident(res.transcript_odia);
+                setVoiceError('AI analysis unavailable — transcript saved. You can edit it.');
+              } else {
+                setVoiceError('Could not understand speech. Please speak clearly in Odia or type.');
+              }
+            } catch (e: any) {
+              setVoiceError(`Voice processing failed: ${e.message}`);
+            } finally {
+              setProcessingVoice(false);
+            }
+          };
+          reader.readAsDataURL(blob);
+        };
+        mediaRecorderRef.current = recorder;
+        recorder.start();
+        setIsListening(true);
+        setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, 30000);
+      })
+      .catch(() => setVoiceError('Microphone permission denied. Please allow microphone access.'));
   }
 
   // ── Incident photo (optional, separate from mandatory checkpoint photo) ──
@@ -1422,7 +1431,7 @@ export default function Patrols() {
                       <div className="mt-2 space-y-2">
                         <div className="relative">
                           <textarea value={scanIncident} onChange={e => setScanIncident(e.target.value)}
-                            rows={3} placeholder="Describe the incident… or tap the mic and speak in Odia"
+                            rows={3} placeholder="Describe the incident… or tap the mic and speak in Odia / ଓଡ଼ିଆରେ କୁହନ୍ତୁ"
                             className="w-full border border-red-200 rounded-lg px-3 py-2 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-red-100 resize-none" />
                           <button
                             type="button"
@@ -1436,10 +1445,31 @@ export default function Patrols() {
                         </div>
                         {isListening && (
                           <p className="text-[11px] text-red-600 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> Listening… speak in Odia, tap mic again to stop
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> ରେକର୍ଡ ହେଉଛି… ଓଡ଼ିଆରେ କୁହନ୍ତୁ (Recording — speak in Odia, tap mic to stop)
+                          </p>
+                        )}
+                        {processingVoice && (
+                          <p className="text-[11px] text-blue-600 flex items-center gap-1">
+                            <Loader2 size={11} className="animate-spin" /> AI processing — Whisper transcribing + Llama analyzing…
                           </p>
                         )}
                         {voiceError && <p className="text-[11px] text-amber-600">{voiceError}</p>}
+
+                        {aiAnalysis && (
+                          <div className="p-3 rounded-xl border border-blue-200 bg-blue-50 space-y-1.5">
+                            <p className="text-[11px] font-bold text-blue-700">🤖 AI Analysis (Groq Llama 3.1)</p>
+                            <div className="flex gap-2 flex-wrap">
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">📂 {aiAnalysis.category}</span>
+                              <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border',
+                                aiAnalysis.severity === 'Critical' ? 'bg-red-100 text-red-700 border-red-200' :
+                                aiAnalysis.severity === 'High' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                                aiAnalysis.severity === 'Medium' ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                                'bg-green-100 text-green-700 border-green-200')}>⚠ {aiAnalysis.severity}</span>
+                            </div>
+                            {aiAnalysis.action_required && <p className="text-[11px] text-blue-700"><span className="font-medium">Action:</span> {aiAnalysis.action_required}</p>}
+                            <p className="text-[10px] text-blue-500">Edit the text above if needed before submitting.</p>
+                          </div>
+                        )}
 
                         {/* Optional incident photo */}
                         {!incidentPhotoDataUrl ? (

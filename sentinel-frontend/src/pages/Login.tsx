@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
-import { ShieldCheck, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function Login() {
   const { login } = useAuth();
@@ -36,10 +36,16 @@ export default function Login() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-accent mb-4">
-            <ShieldCheck size={32} className="text-white" />
+          <div className="inline-flex items-center justify-center mb-4">
+            <svg width="80" height="88" viewBox="0 0 88 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M44 4 L80 18 L80 52 Q80 76 44 92 Q8 76 8 52 L8 18 Z" fill="#1e3a5f" stroke="#3b82f6" strokeWidth="2.5"/>
+              <circle cx="44" cy="34" r="9" fill="#ffffff" opacity="0.92"/>
+              <path d="M28 62 Q28 48 44 48 Q60 48 60 62" fill="#ffffff" opacity="0.92"/>
+              <circle cx="62" cy="68" r="11" fill="#22c55e"/>
+              <path d="M56.5 68 L60.5 72 L67.5 64" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-wide">SENTINEL</h1>
+          <h1 className="text-2xl font-bold text-white tracking-wide">SENTINEL GUARD</h1>
           <p className="text-white/60 text-sm mt-1">Security Patrol Compliance System</p>
         </div>
 

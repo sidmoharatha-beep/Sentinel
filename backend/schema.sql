@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone TEXT,
   shift TEXT CHECK(shift IN ('A', 'B', 'C', NULL)),
   is_active INTEGER DEFAULT 1,
+  fcm_token TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

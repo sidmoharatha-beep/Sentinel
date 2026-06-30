@@ -43,6 +43,66 @@ app.route('/api/compliance', compliance);
 app.route('/api/notifications', notifications);
 app.route('/api/dashboard', dashboard);
 
+// ─── Groq Whisper + Llama 3.1: Odia voice → AI-analyzed incident ───────────
+app.post('/api/voice-to-incident', async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+  if (!c.env.GROQ_API_KEY) return c.json({ error: 'Groq API not configured' }, 503);
+
+  const body = await c.req.json();
+  const { audio_base64, mime_type = 'audio/webm' } = body;
+  if (!audio_base64) return c.json({ error: 'audio_base64 required' }, 400);
+
+  const audioBytes = Uint8Array.from(atob(audio_base64), ch => ch.charCodeAt(0));
+  const formData = new FormData();
+  formData.append('file', new Blob([audioBytes], { type: mime_type }), 'audio.webm');
+  formData.append('model', 'whisper-large-v3');
+  formData.append('language', 'or');
+  formData.append('response_format', 'json');
+
+  const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${c.env.GROQ_API_KEY}` },
+    body: formData,
+  });
+  const whisperData: any = await whisperRes.json();
+  if (!whisperRes.ok) return c.json({ error: whisperData.error?.message || 'Whisper failed' }, 500);
+  const odiaText = whisperData.text || '';
+  if (!odiaText.trim()) return c.json({ transcript_odia: '', transcript_english: '', analysis: null });
+
+  const llmRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${c.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      temperature: 0.1,
+      max_tokens: 400,
+      messages: [
+        {
+          role: 'system',
+          content: `You are a security incident analysis system for an industrial plant (ITC ICML, Khordha, Odisha).
+You receive Odia language security reports from guards and must output ONLY valid JSON.
+Categories: Security | Safety | Fire | Environmental | Housekeeping
+Severities: Critical | High | Medium | Low
+Respond ONLY with this JSON structure, no other text:
+{"english":"English translation","category":"...","severity":"...","title":"short title max 10 words","action_required":"immediate action needed"}`,
+        },
+        { role: 'user', content: `Odia guard report: "${odiaText}"` },
+      ],
+    }),
+  });
+  const llmData: any = await llmRes.json();
+  let analysis = null;
+  if (llmRes.ok) {
+    try {
+      const raw = llmData.choices?.[0]?.message?.content || '{}';
+      analysis = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    } catch { analysis = null; }
+  }
+
+  return c.json({ transcript_odia: odiaText, transcript_english: analysis?.english || odiaText, analysis });
+});
+
 app.get('/api/health', (c) =>
   c.json({ status: 'ok', timestamp: new Date().toISOString(), version: '3.0.0' })
 );

@@ -54,6 +54,10 @@ export function login(employee_id: string, password: string) {
   return api.post<{ token: string; user: User }>('/auth/login', { employee_id, password });
 }
 
+export function registerFcmToken(token: string) {
+  return api.post('/auth/fcm-token', { token });
+}
+
 export function logout() {
   return api.post('/auth/logout', {});
 }
@@ -84,6 +88,7 @@ export const dashboardApi = {
   incidentStats:  (days = 7) => api.get(`/dashboard/incident-stats?days=${days}`),
   guardPerformance:(days = 30) => api.get(`/dashboard/guard-performance?days=${days}`),
   topRiskAreas:   (days = 30) => api.get(`/dashboard/top-risk-areas?days=${days}`),
+  auditTrail:     () => api.get('/dashboard/audit-trail?limit=500'),
   anomalies:      (staleMinutes = 90) => api.get(`/dashboard/anomalies?stale_minutes=${staleMinutes}`),
   photoTimeline:  (date?: string, guardId?: number) => api.get(`/dashboard/photo-timeline?${new URLSearchParams({ ...(date ? { date } : {}), ...(guardId ? { guard_id: String(guardId) } : {}) })}`),
 };

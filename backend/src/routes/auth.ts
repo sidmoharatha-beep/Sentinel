@@ -90,6 +90,24 @@ app.get('/me', async (c) => {
   return c.json({ user });
 });
 
+// ─── REGISTER PUSH NOTIFICATION TOKEN ───────────────────────────────────────
+// Called by the Android app after Firebase Cloud Messaging hands it a device
+// token. We store one token per user (overwritten on reinstall/new device).
+app.post('/fcm-token', async (c) => {
+  const user = c.get('user') as User | undefined;
+  if (!user) throw new HTTPException(401, { message: 'Authentication required' });
+  const body = await c.req.json();
+  const { token } = body;
+  if (!token || typeof token !== 'string') {
+    throw new HTTPException(400, { message: 'token is required' });
+  }
+  await c.env.SENTINEL_DB
+    .prepare('UPDATE users SET fcm_token = ? WHERE id = ?')
+    .bind(token, user.id)
+    .run();
+  return c.json({ success: true });
+});
+
 // ─── LIST USERS ───────────────────────────────────────────────────────────
 app.get('/users', requireRole('system_admin', 'security_manager', 'security_supervisor'), async (c) => {
   const { role, search, is_active, shift } = c.req.query();

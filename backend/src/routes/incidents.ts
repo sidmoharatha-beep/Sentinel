@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { getAuthUser, requireRole, auditLog } from '../auth';
+import { notifyRoles } from '../fcm';
 import type { Env, User } from '../types';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -157,6 +158,22 @@ app.post('/', async (c) => {
 
   const escalated = needsEscalation(category, severity, title, description);
   if (escalated) await triggerEscalation(c.env.SENTINEL_DB, incidentId, title);
+
+  // ── Push notification to managers & supervisors (free via Firebase FCM) ──
+  // Fire-and-forget: never block the incident response on push delivery.
+  const isSOS = title.startsWith('SOS');
+  if (severity === 'Critical' || isSOS) {
+    c.executionCtx.waitUntil(
+      notifyRoles(
+        c.env.SENTINEL_DB,
+        { FCM_PROJECT_ID: c.env.FCM_PROJECT_ID, FCM_CLIENT_EMAIL: c.env.FCM_CLIENT_EMAIL, FCM_PRIVATE_KEY: c.env.FCM_PRIVATE_KEY },
+        ['system_admin', 'security_manager', 'security_supervisor'],
+        isSOS ? '🚨 SOS Alert' : `🔴 Critical Incident: ${category}`,
+        title,
+        { incidentId: String(incidentId), type: isSOS ? 'sos' : 'incident' }
+      )
+    );
+  }
 
   const row = await c.env.SENTINEL_DB
     .prepare(`
