@@ -1,0 +1,251 @@
+import { useState, useEffect, useCallback } from 'react';
+import { Layout } from '@/components/Layout';
+import { incidentApi } from '@/lib/api';
+import {
+  AlertTriangle, Search, RefreshCw, Loader2, FileText, FileSpreadsheet,
+  MapPin, Clock, X, Camera,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+function parseUTC(iso: string) { return new Date(iso.includes('Z')||iso.includes('+')?iso:iso+'Z'); }
+function fmtDT(iso: string|null) { if(!iso) return '—'; return parseUTC(iso).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}); }
+
+const SEVERITY_BADGE: Record<string,string> = {
+  Critical:'bg-red-50 text-red-700 border-red-200', High:'bg-orange-50 text-orange-700 border-orange-200',
+  Medium:'bg-amber-50 text-amber-700 border-amber-200', Low:'bg-green-50 text-green-700 border-green-200',
+};
+const STATUS_BADGE: Record<string,string> = {
+  Open:'bg-red-50 text-red-700 border-red-200', 'In Progress':'bg-amber-50 text-amber-700 border-amber-200',
+  Resolved:'bg-green-50 text-green-700 border-green-200', Closed:'bg-gray-50 text-gray-600 border-gray-200',
+};
+
+// Convert an image URL to base64 so it can be embedded directly in the
+// exported PDF (otherwise the print window can't reach protected /api/ URLs
+// without the auth header).
+async function imageUrlToBase64(url: string): Promise<string|null> {
+  try {
+    const token = localStorage.getItem('sentinel_token');
+    const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return await new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch { return null; }
+}
+
+function downloadCSV(filename: string, headers: string[], rows: string[]) {
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadIncidentsPDF(incidents: any[]) {
+  // Pre-fetch all photos as base64 so they render inside the print window
+  const withPhotos = await Promise.all(incidents.map(async (i) => ({
+    ...i,
+    photo_b64: i.photo_url ? await imageUrlToBase64(i.photo_url) : null,
+  })));
+
+  const cards = withPhotos.map(i => `
+    <div class="incident-card">
+      <div class="incident-header">
+        <div><b>#${i.id} — ${i.title}</b><br/><small>${i.category} · ${fmtDT(i.reported_at)}</small></div>
+        <span class="badge sev-${i.severity}">${i.severity}</span>
+      </div>
+      <p class="desc">${(i.description||'').replace(/</g,'&lt;')}</p>
+      <table class="meta-table">
+        <tr><td>Status</td><td>${i.status}</td></tr>
+        <tr><td>Site</td><td>${i.site_name||'—'}</td></tr>
+        <tr><td>Reported by</td><td>${i.guard_name||'—'}</td></tr>
+        ${i.resolution_notes ? `<tr><td>Resolution</td><td>${i.resolution_notes}</td></tr>` : ''}
+      </table>
+      ${i.photo_b64 ? `<img class="incident-photo" src="${i.photo_b64}"/>` : ''}
+    </div>`).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Incident Report</title>
+<style>
+body{font-family:Arial,sans-serif;font-size:12px;margin:20px;color:#1a1a2e}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #1e3a5f}
+h1{font-size:18px;color:#1e3a5f;margin:0}
+.meta{font-size:10px;color:#666}
+.incident-card{border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:14px;page-break-inside:avoid}
+.incident-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+.badge{padding:3px 10px;border-radius:12px;font-size:10px;font-weight:700;white-space:nowrap}
+.sev-Critical{background:#fee2e2;color:#991b1b}.sev-High{background:#ffedd5;color:#9a3412}
+.sev-Medium{background:#fef3c7;color:#92400e}.sev-Low{background:#dcfce7;color:#166534}
+.desc{font-size:11px;color:#334155;margin:6px 0}
+.meta-table{width:100%;font-size:10px;margin-top:6px}
+.meta-table td{padding:2px 6px}
+.meta-table td:first-child{color:#94a3b8;width:110px}
+.incident-photo{max-width:280px;max-height:200px;margin-top:8px;border-radius:6px;border:1px solid #e2e8f0}
+.footer{margin-top:20px;font-size:10px;color:#94a3b8;text-align:center}
+@media print{body{margin:0}}
+</style></head><body>
+<div class="header"><div><h1>🛡 Sentinel Guard — Incident Report</h1><div class="meta">Total: ${incidents.length} incidents</div></div>
+<div class="meta">ITC ICML, Khordha · ${new Date().toLocaleString('en-IN',{hour12:false})}</div></div>
+${cards}
+<div class="footer">Generated by Sentinel Guard · Confidential</div></body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  win?.addEventListener('load', () => { win.print(); URL.revokeObjectURL(url); });
+}
+
+export default function Incidents() {
+  const [incidents, setIncidents] = useState<any[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [search, setSearch]       = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [severityFilter, setSeverityFilter] = useState('all');
+  const [selected, setSelected]   = useState<any>(null);
+  const [exporting, setExporting] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    const params: Record<string,string> = { limit: '300' };
+    if (statusFilter !== 'all') params.status = statusFilter;
+    if (severityFilter !== 'all') params.severity = severityFilter;
+    (incidentApi.list as any)(params)
+      .then((d: any) => setIncidents(d.incidents || []))
+      .catch(() => setIncidents([]))
+      .finally(() => setLoading(false));
+  }, [statusFilter, severityFilter]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = incidents.filter(i => {
+    const q = search.toLowerCase();
+    return !q || i.title?.toLowerCase().includes(q) || i.guard_name?.toLowerCase().includes(q) || String(i.id).includes(q);
+  });
+
+  async function handleExportPDF() {
+    setExporting(true);
+    try { await downloadIncidentsPDF(filtered); }
+    finally { setExporting(false); }
+  }
+  function handleExportCSV() {
+    const now = new Date().toISOString().slice(0,10);
+    downloadCSV(`Incidents_${now}.csv`, ['ID','Title','Category','Severity','Status','Guard','Site','Reported At','Resolution'],
+      filtered.map(i => [i.id, `"${i.title}"`, i.category, i.severity, i.status, i.guard_name||'—', i.site_name||'—', fmtDT(i.reported_at), `"${(i.resolution_notes||'').replace(/"/g,"'")}"`].join(',')));
+  }
+
+  const counts = {
+    all: incidents.length,
+    Open: incidents.filter(i=>i.status==='Open').length,
+    'In Progress': incidents.filter(i=>i.status==='In Progress').length,
+    Resolved: incidents.filter(i=>i.status==='Resolved').length,
+  };
+
+  return (
+    <Layout>
+      <header className="mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-semibold text-primary flex items-center gap-2"><AlertTriangle size={20} className="text-red-500"/> Incident History</h2>
+          <p className="text-text-muted text-sm">Full log of reported incidents — search, filter, and export.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleExportPDF} disabled={exporting || filtered.length===0}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm hover:bg-red-100 disabled:opacity-50">
+            {exporting ? <Loader2 size={14} className="animate-spin"/> : <FileText size={14}/>} PDF (with photos)
+          </button>
+          <button onClick={handleExportCSV} disabled={filtered.length===0}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm hover:bg-green-100 disabled:opacity-50">
+            <FileSpreadsheet size={14}/> Excel
+          </button>
+          <button onClick={load} className="p-2 rounded-lg border border-border hover:bg-surface-alt text-text-muted"><RefreshCw size={15} className={loading?'animate-spin':''}/></button>
+        </div>
+      </header>
+
+      <div className="flex gap-2 flex-wrap mb-4">
+        {(['all','Open','In Progress','Resolved'] as const).map(s => (
+          <button key={s} onClick={()=>setStatusFilter(s)}
+            className={cn('px-3 py-1.5 rounded-lg text-xs font-medium border transition-all', statusFilter===s?'bg-accent text-white border-accent':'border-border text-text-muted hover:bg-surface-alt')}>
+            {s === 'all' ? 'All' : s} <span className="opacity-70">({counts[s as keyof typeof counts]})</span>
+          </button>
+        ))}
+        <select value={severityFilter} onChange={e=>setSeverityFilter(e.target.value)}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-text-muted bg-white">
+          <option value="all">All Severities</option>
+          <option value="Critical">Critical</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+      </div>
+
+      <div className="relative mb-4">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"/>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by title, guard, or ID…"
+          className="w-full pl-8 pr-4 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent/30"/>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16 gap-2 text-text-muted"><Loader2 size={20} className="animate-spin"/> Loading incidents…</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-text-muted text-sm">No incidents found.</div>
+      ) : (
+        <div className="space-y-2.5">
+          {filtered.map(i => (
+            <button key={i.id} onClick={()=>setSelected(i)} className="w-full text-left p-4 rounded-xl border border-border bg-white hover:shadow-md transition-all">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <p className="text-sm font-semibold text-primary truncate">#{i.id} {i.title}</p>
+                    {i.photo_url && <Camera size={12} className="text-text-muted shrink-0"/>}
+                  </div>
+                  <div className="flex items-center gap-3 flex-wrap text-xs text-text-muted">
+                    <span className="flex items-center gap-1"><MapPin size={10}/> {i.site_name||'—'}</span>
+                    <span className="flex items-center gap-1"><Clock size={10}/> {fmtDT(i.reported_at)}</span>
+                    <span>{i.category}</span>
+                    <span>{i.guard_name||'—'}</span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5 items-end shrink-0">
+                  <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border', SEVERITY_BADGE[i.severity])}>{i.severity}</span>
+                  <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border', STATUS_BADGE[i.status])}>{i.status}</span>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selected && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4" onClick={()=>setSelected(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+            <div className="p-5 border-b border-border flex items-start justify-between">
+              <div>
+                <h3 className="font-bold text-primary">#{selected.id} {selected.title}</h3>
+                <p className="text-xs text-text-muted mt-0.5">{fmtDT(selected.reported_at)}</p>
+              </div>
+              <button onClick={()=>setSelected(null)} className="p-1 rounded-lg hover:bg-surface-alt text-text-muted"><X size={16}/></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="flex gap-2">
+                <span className={cn('text-xs font-semibold px-2 py-1 rounded-full border', SEVERITY_BADGE[selected.severity])}>{selected.severity}</span>
+                <span className={cn('text-xs font-semibold px-2 py-1 rounded-full border', STATUS_BADGE[selected.status])}>{selected.status}</span>
+              </div>
+              <p className="text-sm text-primary">{selected.description}</p>
+              <div className="text-xs text-text-muted space-y-1">
+                <p><span className="font-medium">Category:</span> {selected.category}</p>
+                <p><span className="font-medium">Site:</span> {selected.site_name||'—'}</p>
+                <p><span className="font-medium">Reported by:</span> {selected.guard_name||'—'}</p>
+                {selected.resolution_notes && <p><span className="font-medium">Resolution:</span> {selected.resolution_notes}</p>}
+              </div>
+              {selected.photo_url && (
+                <img src={selected.photo_url} alt="Incident" className="w-full rounded-xl border border-border"/>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </Layout>
+  );
+}

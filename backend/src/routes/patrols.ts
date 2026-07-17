@@ -588,6 +588,12 @@ app.patch('/:id', requireRole('system_admin', 'security_supervisor', 'security_g
 // ─── DELETE /:id ──────────────────────────────────────────────────────────
 app.delete('/:id', requireRole('system_admin'), async (c) => {
   const id = Number(c.req.param('id'));
+  const checkpoints = await c.env.SENTINEL_DB.prepare('SELECT id FROM patrol_checkpoints WHERE patrol_id = ?').bind(id).all<{id:number}>();
+  for (const cp of checkpoints.results ?? []) {
+    await c.env.SENTINEL_DB.prepare('DELETE FROM checklist_responses WHERE patrol_checkpoint_id = ?').bind(cp.id).run();
+  }
+  await c.env.SENTINEL_DB.prepare('DELETE FROM patrol_checkpoints WHERE patrol_id = ?').bind(id).run();
+  await c.env.SENTINEL_DB.prepare('DELETE FROM incidents WHERE patrol_id = ?').bind(id).run().catch(() => {});
   const result = await c.env.SENTINEL_DB.prepare('DELETE FROM patrols WHERE id = ?').bind(id).run<{ changes: number }>();
   if ((result.meta?.changes ?? (result as any).changes) === 0) throw new HTTPException(404, { message: 'Patrol not found' });
   return c.body(null, 204);

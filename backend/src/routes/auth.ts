@@ -235,6 +235,24 @@ app.patch('/users/:id', requireRole('system_admin'), async (c) => {
 // ─── DELETE USER ──────────────────────────────────────────────────────────
 app.delete('/users/:id', requireRole('system_admin'), async (c) => {
   const id = Number(c.req.param('id'));
+  const user = c.get('user') as User;
+  if (user.id === id) throw new HTTPException(400, { message: 'Cannot delete your own account' });
+
+  // patrols.guard_id is NOT NULL, so we cascade-delete this user's patrol
+  // history (and its child records) rather than leaving orphaned rows.
+  const patrolIds = await c.env.SENTINEL_DB.prepare('SELECT id FROM patrols WHERE guard_id = ?').bind(id).all<{id:number}>();
+  for (const p of patrolIds.results ?? []) {
+    const cps = await c.env.SENTINEL_DB.prepare('SELECT id FROM patrol_checkpoints WHERE patrol_id = ?').bind(p.id).all<{id:number}>();
+    for (const cp of cps.results ?? []) {
+      await c.env.SENTINEL_DB.prepare('DELETE FROM checklist_responses WHERE patrol_checkpoint_id = ?').bind(cp.id).run();
+    }
+    await c.env.SENTINEL_DB.prepare('DELETE FROM patrol_checkpoints WHERE patrol_id = ?').bind(p.id).run();
+  }
+  await c.env.SENTINEL_DB.prepare('DELETE FROM incidents WHERE guard_id = ?').bind(id).run().catch(() => {});
+  await c.env.SENTINEL_DB.prepare('DELETE FROM patrols WHERE guard_id = ?').bind(id).run();
+  await c.env.SENTINEL_DB.prepare('UPDATE notifications SET user_id = NULL WHERE user_id = ?').bind(id).run().catch(() => {});
+  await c.env.SENTINEL_DB.prepare('UPDATE audit_logs SET user_id = NULL WHERE user_id = ?').bind(id).run().catch(() => {});
+
   const result = await c.env.SENTINEL_DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run<{ changes: number }>();
   if ((result.meta?.changes ?? (result as any).changes) === 0) throw new HTTPException(404, { message: 'User not found' });
   return c.body(null, 204);

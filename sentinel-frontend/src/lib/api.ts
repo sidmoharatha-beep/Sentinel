@@ -89,6 +89,7 @@ export const dashboardApi = {
   guardPerformance:(days = 30) => api.get(`/dashboard/guard-performance?days=${days}`),
   topRiskAreas:   (days = 30) => api.get(`/dashboard/top-risk-areas?days=${days}`),
   auditTrail:     () => api.get('/dashboard/audit-trail?limit=500'),
+  insights:       () => api.get('/dashboard/insights'),
   anomalies:      (staleMinutes = 90) => api.get(`/dashboard/anomalies?stale_minutes=${staleMinutes}`),
   photoTimeline:  (date?: string, guardId?: number) => api.get(`/dashboard/photo-timeline?${new URLSearchParams({ ...(date ? { date } : {}), ...(guardId ? { guard_id: String(guardId) } : {}) })}`),
 };

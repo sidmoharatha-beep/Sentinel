@@ -7,6 +7,7 @@ import Compliance from '@/pages/Compliance';
 import Reports from '@/pages/Reports';
 import Settings from '@/pages/Settings';
 import LiveMap from '@/pages/LiveMap';
+import Incidents from '@/pages/Incidents';
 import Login from '@/pages/Login';
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -50,6 +51,9 @@ export default function App() {
           } />
           <Route path="/live-site" element={
             <RequireAuth><LiveMap /></RequireAuth>
+          } />
+          <Route path="/incidents" element={
+            <RequireAuth><Incidents /></RequireAuth>
           } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

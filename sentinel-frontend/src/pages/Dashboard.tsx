@@ -5,7 +5,7 @@ import { dashboardApi, incidentApi } from '@/lib/api';
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Clock,
   MapPin, Activity, RefreshCw, Flame, TrendingUp,
-  ShieldAlert, X, Loader2,
+  ShieldAlert, X, Loader2, Sparkles,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -53,6 +53,7 @@ export default function Dashboard() {
   const [shiftComp, setShiftComp]       = useState<any>(null);
   const [currentShift, setCurrentShift] = useState<any>(null);
   const [topRisk, setTopRisk]           = useState<any>(null);
+  const [insights, setInsights]         = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
 
   const [closingIncident, setClosingIncident] = useState<any>(null);
@@ -70,8 +71,10 @@ export default function Dashboard() {
       dashboardApi.shiftCompliance(7) as Promise<any>,
       fetch('/api/patrols/current-shift').then(r=>r.json()),
       dashboardApi.topRiskAreas(30) as Promise<any>,
-    ]).then(([ov,ps,sc,cs,tr])=>{
+      (dashboardApi as any).insights().catch(() => ({ insights: [] })),
+    ]).then(([ov,ps,sc,cs,tr,ins]:any[])=>{
       setOverview(ov); setPatrolStats(ps); setShiftComp(sc); setCurrentShift(cs); setTopRisk(tr);
+      setInsights(ins.insights || []);
     }).catch(()=>{}).finally(()=>setLoading(false));
   }
   useEffect(load, []);
@@ -138,6 +141,28 @@ export default function Dashboard() {
         <StatCard title="Open Incidents" value={stats.open_incidents ?? '—'} icon={<AlertTriangle size={20} className="text-amber-600"/>} iconBg="bg-amber-50" subtitle="Pending resolution"/>
         <StatCard title="Critical Open" value={stats.criticalOpen ?? stats.critical_incidents ?? '—'} icon={<Flame size={20} className="text-red-600"/>} iconBg="bg-red-50" subtitle="Needs immediate attention"/>
       </section>
+
+      {/* ── Smart Insights (AI-style analytics for security manager) ─────── */}
+      {!isGuard && insights.length > 0 && (
+        <section className="bg-white rounded-2xl border border-border p-5 mb-6">
+          <h3 className="text-sm font-semibold text-primary flex items-center gap-2 mb-4">
+            <Sparkles size={15} className="text-purple-500"/> Smart Insights
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {insights.map((ins, i) => (
+              <div key={i} className={cn('flex items-start gap-2.5 p-3 rounded-xl border text-xs',
+                ins.severity === 'critical' ? 'bg-red-50 border-red-200 text-red-700' :
+                ins.severity === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                'bg-blue-50 border-blue-200 text-blue-700')}>
+                <span className="shrink-0 mt-0.5">
+                  {ins.severity === 'critical' ? <Flame size={13}/> : ins.severity === 'warning' ? <AlertTriangle size={13}/> : <Sparkles size={13}/>}
+                </span>
+                <p className="leading-snug">{ins.message}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {!isGuard && (
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-6">

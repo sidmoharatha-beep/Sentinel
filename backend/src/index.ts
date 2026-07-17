@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { HTTPException } from 'hono/http-exception';
 import type { Env } from './types';
+import { getAuthUser } from './auth';
 
 import auth from './routes/auth';
 import sites from './routes/sites';
@@ -45,7 +46,7 @@ app.route('/api/dashboard', dashboard);
 
 // ─── Groq Whisper + Llama 3.1: Odia voice → AI-analyzed incident ───────────
 app.post('/api/voice-to-incident', async (c) => {
-  const user = c.get('user');
+  const user = await getAuthUser(c);
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
   if (!c.env.GROQ_API_KEY) return c.json({ error: 'Groq API not configured' }, 503);
 
