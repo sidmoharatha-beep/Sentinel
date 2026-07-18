@@ -26,9 +26,18 @@ async function request<T = unknown>(
     throw new Error('Session expired');
   }
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
-  return data as T;
+  // Safely read the body: it may be empty (204 No Content), JSON, or
+  // occasionally plain text (e.g. a framework-level error page). Never
+  // call res.json() unconditionally — that throws on empty bodies.
+  const raw = await res.text();
+  let data: any = null;
+  if (raw) {
+    try { data = JSON.parse(raw); }
+    catch { data = { error: raw }; }
+  }
+
+  if (!res.ok) throw new Error(data?.error || res.statusText || `Request failed (${res.status})`);
+  return (data ?? ({} as T)) as T;
 }
 
 export const api = {

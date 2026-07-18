@@ -380,89 +380,98 @@ app.get('/photo-timeline', requireRole('system_admin', 'security_manager', 'secu
 app.get('/insights', requireRole('system_admin', 'security_manager', 'security_supervisor'), async (c) => {
   const insights: { type: string; severity: 'info'|'warning'|'critical'; message: string }[] = [];
 
-  // 1. Compliance trend: this week vs last week
-  const thisWeek = await c.env.SENTINEL_DB.prepare(`
-    SELECT COUNT(*) as total, SUM(CASE WHEN status='scanned' THEN 1 ELSE 0 END) as done
-    FROM patrol_checkpoints pc JOIN patrols p ON pc.patrol_id = p.id
-    WHERE p.actual_start >= datetime('now','-7 days')
-  `).first<{total:number,done:number}>();
-  const lastWeek = await c.env.SENTINEL_DB.prepare(`
-    SELECT COUNT(*) as total, SUM(CASE WHEN status='scanned' THEN 1 ELSE 0 END) as done
-    FROM patrol_checkpoints pc JOIN patrols p ON pc.patrol_id = p.id
-    WHERE p.actual_start >= datetime('now','-14 days') AND p.actual_start < datetime('now','-7 days')
-  `).first<{total:number,done:number}>();
-  const thisRate = thisWeek?.total ? Math.round((thisWeek.done/thisWeek.total)*100) : null;
-  const lastRate = lastWeek?.total ? Math.round((lastWeek.done/lastWeek.total)*100) : null;
-  if (thisRate != null && lastRate != null) {
-    const delta = thisRate - lastRate;
-    if (Math.abs(delta) >= 5) {
-      insights.push({
-        type: 'compliance_trend',
-        severity: delta < 0 ? 'warning' : 'info',
-        message: delta > 0
-          ? `Compliance improved ${delta}% vs last week (${lastRate}% → ${thisRate}%)`
-          : `Compliance dropped ${Math.abs(delta)}% vs last week (${lastRate}% → ${thisRate}%) — worth investigating`,
-      });
+  // Each check runs independently — if one query fails (e.g. no data yet,
+  // schema drift), we log it and continue rather than 500ing the whole
+  // endpoint and losing every other insight.
+  try {
+    const thisWeek = await c.env.SENTINEL_DB.prepare(`
+      SELECT COUNT(*) as total, SUM(CASE WHEN status='scanned' THEN 1 ELSE 0 END) as done
+      FROM patrol_checkpoints pc JOIN patrols p ON pc.patrol_id = p.id
+      WHERE p.actual_start >= datetime('now','-7 days')
+    `).first<{total:number,done:number}>();
+    const lastWeek = await c.env.SENTINEL_DB.prepare(`
+      SELECT COUNT(*) as total, SUM(CASE WHEN status='scanned' THEN 1 ELSE 0 END) as done
+      FROM patrol_checkpoints pc JOIN patrols p ON pc.patrol_id = p.id
+      WHERE p.actual_start >= datetime('now','-14 days') AND p.actual_start < datetime('now','-7 days')
+    `).first<{total:number,done:number}>();
+    const thisRate = thisWeek?.total ? Math.round((thisWeek.done/thisWeek.total)*100) : null;
+    const lastRate = lastWeek?.total ? Math.round((lastWeek.done/lastWeek.total)*100) : null;
+    if (thisRate != null && lastRate != null) {
+      const delta = thisRate - lastRate;
+      if (Math.abs(delta) >= 5) {
+        insights.push({
+          type: 'compliance_trend',
+          severity: delta < 0 ? 'warning' : 'info',
+          message: delta > 0
+            ? `Compliance improved ${delta}% vs last week (${lastRate}% → ${thisRate}%)`
+            : `Compliance dropped ${Math.abs(delta)}% vs last week (${lastRate}% → ${thisRate}%) — worth investigating`,
+        });
+      }
     }
-  }
+  } catch (e) { console.error('insights: compliance_trend failed', e); }
 
-  // 2. Most common incident category (last 30 days)
-  const topCategory = await c.env.SENTINEL_DB.prepare(`
-    SELECT category, COUNT(*) as cnt FROM incidents
-    WHERE reported_at >= datetime('now','-30 days')
-    GROUP BY category ORDER BY cnt DESC LIMIT 1
-  `).first<{category:string,cnt:number}>();
-  if (topCategory && topCategory.cnt >= 2) {
-    insights.push({ type: 'top_category', severity: 'info', message: `"${topCategory.category}" is the most frequent incident type this month (${topCategory.cnt} reports)` });
-  }
+  try {
+    const topCategory = await c.env.SENTINEL_DB.prepare(`
+      SELECT category, COUNT(*) as cnt FROM incidents
+      WHERE reported_at >= datetime('now','-30 days')
+      GROUP BY category ORDER BY cnt DESC LIMIT 1
+    `).first<{category:string,cnt:number}>();
+    if (topCategory && topCategory.cnt >= 2) {
+      insights.push({ type: 'top_category', severity: 'info', message: `"${topCategory.category}" is the most frequent incident type this month (${topCategory.cnt} reports)` });
+    }
+  } catch (e) { console.error('insights: top_category failed', e); }
 
-  // 3. Riskiest checkpoint (most incidents linked, last 30 days)
-  const riskiestCP = await c.env.SENTINEL_DB.prepare(`
-    SELECT c.name, COUNT(*) as cnt FROM incidents i
-    LEFT JOIN checkpoints c ON i.checkpoint_id = c.id
-    WHERE i.reported_at >= datetime('now','-30 days') AND c.name IS NOT NULL
-    GROUP BY c.name ORDER BY cnt DESC LIMIT 1
-  `).first<{name:string,cnt:number}>();
-  if (riskiestCP && riskiestCP.cnt >= 2) {
-    insights.push({ type: 'risk_area', severity: 'warning', message: `${riskiestCP.name} has had ${riskiestCP.cnt} incidents in the last 30 days — consider increased patrol frequency` });
-  }
+  try {
+    const riskiestCP = await c.env.SENTINEL_DB.prepare(`
+      SELECT c.name, COUNT(*) as cnt FROM incidents i
+      LEFT JOIN checkpoints c ON i.checkpoint_id = c.id
+      WHERE i.reported_at >= datetime('now','-30 days') AND c.name IS NOT NULL
+      GROUP BY c.name ORDER BY cnt DESC LIMIT 1
+    `).first<{name:string,cnt:number}>();
+    if (riskiestCP && riskiestCP.cnt >= 2) {
+      insights.push({ type: 'risk_area', severity: 'warning', message: `${riskiestCP.name} has had ${riskiestCP.cnt} incidents in the last 30 days — consider increased patrol frequency` });
+    }
+  } catch (e) { console.error('insights: risk_area failed', e); }
 
-  // 4. Shift with lowest compliance (last 7 days)
-  const shiftRates = await c.env.SENTINEL_DB.prepare(`
-    SELECT p.shift, COUNT(*) as total, SUM(CASE WHEN pc.status='scanned' THEN 1 ELSE 0 END) as done
-    FROM patrol_checkpoints pc JOIN patrols p ON pc.patrol_id = p.id
-    WHERE p.actual_start >= datetime('now','-7 days') AND p.shift IS NOT NULL
-    GROUP BY p.shift
-  `).all<{shift:string,total:number,done:number}>();
-  let worstShift: { shift: string; rate: number } | null = null;
-  for (const s of shiftRates.results ?? []) {
-    const rate = s.total ? Math.round((s.done/s.total)*100) : 100;
-    if (!worstShift || rate < worstShift.rate) worstShift = { shift: s.shift, rate };
-  }
-  if (worstShift && worstShift.rate < 70) {
-    insights.push({ type: 'weak_shift', severity: 'warning', message: `Shift ${worstShift.shift} has the lowest compliance this week (${worstShift.rate}%) — may need reinforcement or retraining` });
-  }
+  try {
+    const shiftRates = await c.env.SENTINEL_DB.prepare(`
+      SELECT p.shift, COUNT(*) as total, SUM(CASE WHEN pc.status='scanned' THEN 1 ELSE 0 END) as done
+      FROM patrol_checkpoints pc JOIN patrols p ON pc.patrol_id = p.id
+      WHERE p.actual_start >= datetime('now','-7 days') AND p.shift IS NOT NULL
+      GROUP BY p.shift
+    `).all<{shift:string,total:number,done:number}>();
+    let worstShift: { shift: string; rate: number } | null = null;
+    for (const s of shiftRates.results ?? []) {
+      const rate = s.total ? Math.round((s.done/s.total)*100) : 100;
+      if (!worstShift || rate < worstShift.rate) worstShift = { shift: s.shift, rate };
+    }
+    if (worstShift && worstShift.rate < 70) {
+      insights.push({ type: 'weak_shift', severity: 'warning', message: `Shift ${worstShift.shift} has the lowest compliance this week (${worstShift.rate}%) — may need reinforcement or retraining` });
+    }
+  } catch (e) { console.error('insights: weak_shift failed', e); }
 
-  // 5. Unresolved critical incidents older than 24h
-  const staleCritical = await c.env.SENTINEL_DB.prepare(`
-    SELECT COUNT(*) as cnt FROM incidents
-    WHERE severity='Critical' AND status NOT IN ('Resolved','Closed')
-    AND reported_at < datetime('now','-1 day')
-  `).first<{cnt:number}>();
-  if (staleCritical && staleCritical.cnt > 0) {
-    insights.push({ type: 'stale_critical', severity: 'critical', message: `${staleCritical.cnt} critical incident${staleCritical.cnt>1?'s have':' has'} been open for more than 24 hours — needs immediate resolution` });
-  }
+  try {
+    const staleCritical = await c.env.SENTINEL_DB.prepare(`
+      SELECT COUNT(*) as cnt FROM incidents
+      WHERE severity='Critical' AND status NOT IN ('Resolved','Closed')
+      AND reported_at < datetime('now','-1 day')
+    `).first<{cnt:number}>();
+    if (staleCritical && staleCritical.cnt > 0) {
+      insights.push({ type: 'stale_critical', severity: 'critical', message: `${staleCritical.cnt} critical incident${staleCritical.cnt>1?'s have':' has'} been open for more than 24 hours — needs immediate resolution` });
+    }
+  } catch (e) { console.error('insights: stale_critical failed', e); }
 
-  // 6. Guard with most incidents reported (proactive reporting recognition)
-  const activeReporter = await c.env.SENTINEL_DB.prepare(`
-    SELECT u.full_name, COUNT(*) as cnt FROM incidents i
-    JOIN users u ON i.guard_id = u.id
-    WHERE i.reported_at >= datetime('now','-30 days')
-    GROUP BY u.id ORDER BY cnt DESC LIMIT 1
-  `).first<{full_name:string,cnt:number}>();
-  if (activeReporter && activeReporter.cnt >= 3) {
-    insights.push({ type: 'active_reporter', severity: 'info', message: `${activeReporter.full_name} has reported ${activeReporter.cnt} incidents this month — most proactive guard` });
-  }
+  try {
+    const activeReporter = await c.env.SENTINEL_DB.prepare(`
+      SELECT u.full_name, COUNT(*) as cnt FROM incidents i
+      JOIN users u ON i.guard_id = u.id
+      WHERE i.reported_at >= datetime('now','-30 days')
+      GROUP BY u.id ORDER BY cnt DESC LIMIT 1
+    `).first<{full_name:string,cnt:number}>();
+    if (activeReporter && activeReporter.cnt >= 3) {
+      insights.push({ type: 'active_reporter', severity: 'info', message: `${activeReporter.full_name} has reported ${activeReporter.cnt} incidents this month — most proactive guard` });
+    }
+  } catch (e) { console.error('insights: active_reporter failed', e); }
 
   return c.json({ insights });
 });

@@ -65,7 +65,10 @@ export default function LiveMap() {
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 
+  const [loadError, setLoadError] = useState('');
+
   const loadData = useCallback(async () => {
+    setLoading(true); setLoadError('');
     try {
       const today = new Date().toISOString().slice(0,10);
       const [tl, patrols]: any[] = await Promise.all([
@@ -75,8 +78,12 @@ export default function LiveMap() {
       setTimeline(tl.timeline||[]);
       setActivePatrols(patrols.patrols||[]);
       setLastRefresh(new Date());
-    } catch {}
-    finally { setLoading(false); }
+      if (mapRef.current) setTimeout(() => mapRef.current?.invalidateSize(), 100);
+    } catch (e: any) {
+      setLoadError(e?.message || 'Failed to refresh live map data');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -151,7 +158,12 @@ export default function LiveMap() {
           <div className="flex-1 relative">
             <div ref={mapElRef} style={{width:'100%',height:'100%'}}/>
             {loading && <div className="absolute inset-0 flex items-center justify-center bg-white/40 z-[1000]"><Loader2 size={22} className="animate-spin text-accent"/></div>}
-            {!loading && guards.length === 0 && (
+            {!loading && loadError && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-red-50 border border-red-200 rounded-xl px-4 py-2 shadow-lg text-xs text-red-700 z-[999] flex items-center gap-2">
+                <AlertTriangle size={13}/> {loadError} — <button onClick={loadData} className="underline font-medium">retry</button>
+              </div>
+            )}
+            {!loading && !loadError && guards.length === 0 && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-white border border-border rounded-xl px-4 py-2 shadow-lg text-xs text-text-muted z-[999]">
                 No guard has scanned a checkpoint yet today — markers appear once a scan is submitted.
               </div>

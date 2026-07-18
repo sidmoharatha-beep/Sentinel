@@ -250,7 +250,17 @@ app.delete('/users/:id', requireRole('system_admin'), async (c) => {
   }
   await c.env.SENTINEL_DB.prepare('DELETE FROM incidents WHERE guard_id = ?').bind(id).run().catch(() => {});
   await c.env.SENTINEL_DB.prepare('DELETE FROM patrols WHERE guard_id = ?').bind(id).run();
-  await c.env.SENTINEL_DB.prepare('UPDATE notifications SET user_id = NULL WHERE user_id = ?').bind(id).run().catch(() => {});
+
+  // incidents.escalated_to is nullable — safe to clear
+  await c.env.SENTINEL_DB.prepare('UPDATE incidents SET escalated_to = NULL WHERE escalated_to = ?').bind(id).run().catch(() => {});
+  // compliance_records.reviewed_by is nullable — safe to clear
+  await c.env.SENTINEL_DB.prepare('UPDATE compliance_records SET reviewed_by = NULL WHERE reviewed_by = ?').bind(id).run().catch(() => {});
+  // reports.generated_by is NOT NULL — delete those report rows instead of nullifying
+  await c.env.SENTINEL_DB.prepare('DELETE FROM reports WHERE generated_by = ?').bind(id).run().catch(() => {});
+  // notifications.user_id is NOT NULL with ON DELETE CASCADE — delete rows directly
+  // rather than nullify (nullifying would violate the NOT NULL constraint and fail silently)
+  await c.env.SENTINEL_DB.prepare('DELETE FROM notifications WHERE user_id = ?').bind(id).run().catch(() => {});
+  // audit_logs.user_id is nullable — safe to clear (keeps the log entry for history)
   await c.env.SENTINEL_DB.prepare('UPDATE audit_logs SET user_id = NULL WHERE user_id = ?').bind(id).run().catch(() => {});
 
   const result = await c.env.SENTINEL_DB.prepare('DELETE FROM users WHERE id = ?').bind(id).run<{ changes: number }>();

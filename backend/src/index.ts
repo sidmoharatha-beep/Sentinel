@@ -139,7 +139,9 @@ app.get('/*', async (c) => {
 app.notFound((c) => c.json({ error: 'Endpoint not found' }, 404));
 
 app.onError((err, c) => {
-  if (err instanceof HTTPException) return err.getResponse();
+  if (err instanceof HTTPException) {
+    return c.json({ error: err.message }, err.status);
+  }
   console.error(err);
   return c.json({ error: err.message || 'Internal Server Error' }, 500);
 });

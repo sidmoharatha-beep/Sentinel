@@ -1,4 +1,8 @@
-const CACHE_NAME = 'sentinel-v2';
+// Sentinel Guard service worker
+// Strategy: network-first for app shell/JS/CSS so every new deploy is
+// picked up immediately. Falls back to cache only when offline — this is
+// what lets guards keep scanning checkpoints with no signal.
+const CACHE_NAME = 'sentinel-v3';
 const STATIC_ASSETS = ['/', '/index.html'];
 
 self.addEventListener('install', (event) => {
@@ -20,7 +24,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Network-first for API calls
+  // API calls: always network, no caching (data must be fresh/live)
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(event.request).catch(() =>
@@ -32,16 +36,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for static assets
+  // Everything else (app shell, JS, CSS): network-first, cache as fallback.
+  // This guarantees a fresh deploy is always loaded when online, while
+  // still working offline from the last successfully cached version.
   event.respondWith(
-    caches.match(event.request).then(cached =>
-      cached || fetch(event.request).then(response => {
+    fetch(event.request)
+      .then(response => {
         if (response.ok) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
         }
         return response;
       })
-    )
+      .catch(() => caches.match(event.request))
   );
 });
