@@ -14,6 +14,9 @@ database_id = "70a71ca7-4b7e-487a-8aa6-46e236c841c7"
 binding = "SENTINEL_R2"
 bucket_name = "sentinel-r2"
 
+[ai]
+binding = "AI"
+
 [assets]
 directory = "../sentinel-frontend/dist"
 binding = "ASSETS"

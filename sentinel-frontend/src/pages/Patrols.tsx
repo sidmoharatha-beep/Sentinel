@@ -475,7 +475,7 @@ export default function Patrols() {
     setScanModal(null);
   }
 
-  // ── Voice input (Groq Whisper + Llama 3.1 — Odia → AI-analyzed incident) ─
+  // ── Voice input (Cloudflare Workers AI: Whisper + Llama 3.1 — Hindi → AI-analyzed incident) ─
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef   = useRef<Blob[]>([]);
   const [aiAnalysis, setAiAnalysis]           = useState<any>(null);
@@ -503,15 +503,15 @@ export default function Patrols() {
           reader.onload = async () => {
             const base64 = (reader.result as string).split(',')[1];
             try {
-              const res: any = await (api.post as any)('/voice-to-incident', { audio_base64: base64, mime_type: 'audio/webm' });
+              const res: any = await (api.post as any)('/voice-to-incident', { audio_base64: base64 });
               if (res.analysis) {
                 setAiAnalysis(res.analysis);
-                setScanIncident(res.analysis.english || res.transcript_odia || '');
-              } else if (res.transcript_odia) {
-                setScanIncident(res.transcript_odia);
+                setScanIncident(res.analysis.english || res.transcript_hindi || '');
+              } else if (res.transcript_hindi) {
+                setScanIncident(res.transcript_hindi);
                 setVoiceError('AI analysis unavailable — transcript saved. You can edit it.');
               } else {
-                setVoiceError('Could not understand speech. Please speak clearly in Odia or type.');
+                setVoiceError('Could not understand speech. Please speak clearly in Hindi or type.');
               }
             } catch (e: any) {
               setVoiceError(`Voice processing failed: ${e.message}`);
@@ -1431,12 +1431,12 @@ export default function Patrols() {
                       <div className="mt-2 space-y-2">
                         <div className="relative">
                           <textarea value={scanIncident} onChange={e => setScanIncident(e.target.value)}
-                            rows={3} placeholder="Describe the incident… or tap the mic and speak in Odia / ଓଡ଼ିଆରେ କୁହନ୍ତୁ"
+                            rows={3} placeholder="Describe the incident… or tap the mic and speak in Hindi / हिंदी में बोलें"
                             className="w-full border border-red-200 rounded-lg px-3 py-2 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-red-100 resize-none" />
                           <button
                             type="button"
                             onClick={toggleVoiceInput}
-                            title={isListening ? 'Stop recording' : 'Speak in Odia'}
+                            title={isListening ? 'Stop recording' : 'Speak in Hindi'}
                             className={cn('absolute right-2 top-2 p-1.5 rounded-full transition-colors',
                               isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-red-50 text-red-600 hover:bg-red-100'
                             )}>
@@ -1445,7 +1445,7 @@ export default function Patrols() {
                         </div>
                         {isListening && (
                           <p className="text-[11px] text-red-600 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> ରେକର୍ଡ ହେଉଛି… ଓଡ଼ିଆରେ କୁହନ୍ତୁ (Recording — speak in Odia, tap mic to stop)
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /> रिकॉर्ड हो रहा है… हिंदी में बोलें (Recording — speak in Hindi, tap mic to stop)
                           </p>
                         )}
                         {processingVoice && (
@@ -1457,7 +1457,7 @@ export default function Patrols() {
 
                         {aiAnalysis && (
                           <div className="p-3 rounded-xl border border-blue-200 bg-blue-50 space-y-1.5">
-                            <p className="text-[11px] font-bold text-blue-700">🤖 AI Analysis (Groq Llama 3.1)</p>
+                            <p className="text-[11px] font-bold text-blue-700">🤖 AI Analysis (Cloudflare Workers AI)</p>
                             <div className="flex gap-2 flex-wrap">
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200">📂 {aiAnalysis.category}</span>
                               <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border',
