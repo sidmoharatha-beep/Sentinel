@@ -274,12 +274,12 @@ export default function Reports() {
             <thead className="bg-gray-50 border-b border-border"><tr>{['Guard','Employee ID','Patrols','Completed','Compliance %'].map(h=><th key={h} className="text-left px-3 py-2 text-xs font-semibold text-text-muted">{h}</th>)}</tr></thead>
             <tbody className="divide-y divide-border">
               {guards.map((g:any)=>(
-                <tr key={g.guard_id} className="hover:bg-gray-50">
-                  <td className="px-3 py-2.5 text-xs font-medium text-primary">{g.guard_name}</td>
+                <tr key={g.id} className="hover:bg-gray-50">
+                  <td className="px-3 py-2.5 text-xs font-medium text-primary">{g.full_name}</td>
                   <td className="px-3 py-2.5 text-xs text-text-muted">{g.employee_id}</td>
                   <td className="px-3 py-2.5 text-xs text-text-muted">{g.total_patrols}</td>
-                  <td className="px-3 py-2.5 text-xs text-text-muted">{g.completed}</td>
-                  <td className="px-3 py-2.5"><div className="flex items-center gap-2"><div className="flex-1 h-1.5 rounded-full bg-gray-200 max-w-16"><div className="h-full rounded-full bg-accent" style={{width:`${g.compliance_pct}%`}}/></div><span className="text-xs font-medium text-primary">{g.compliance_pct}%</span></div></td>
+                  <td className="px-3 py-2.5 text-xs text-text-muted">{g.completed_patrols}</td>
+                  <td className="px-3 py-2.5"><div className="flex items-center gap-2"><div className="flex-1 h-1.5 rounded-full bg-gray-200 max-w-16"><div className="h-full rounded-full bg-accent" style={{width:`${g.completion_rate}%`}}/></div><span className="text-xs font-medium text-primary">{g.completion_rate}%</span></div></td>
                 </tr>
               ))}
             </tbody>

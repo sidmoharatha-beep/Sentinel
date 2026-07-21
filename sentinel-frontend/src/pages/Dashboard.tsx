@@ -98,7 +98,7 @@ export default function Dashboard() {
   const criticalAlerts = overview?.critical_alerts || [];
   const recentPatrols  = overview?.recent_patrols || [];
   const shifts         = shiftComp?.shift_compliance || [];
-  const riskAreas      = topRisk?.areas || [];
+  const riskAreas      = topRisk?.risk_areas || [];
   const cs             = currentShift?.shift;
 
   const chartData = (patrolStats?.by_day || []).map((d: any) => ({
@@ -136,10 +136,10 @@ export default function Dashboard() {
       </header>
 
       <section className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <StatCard title="Active Patrols" value={stats.active_patrols ?? '—'} icon={<Activity size={20} className="text-blue-600"/>} iconBg="bg-blue-50" subtitle="Currently in progress"/>
+        <StatCard title="Active Patrols" value={stats.activePatrols ?? '—'} icon={<Activity size={20} className="text-blue-600"/>} iconBg="bg-blue-50" subtitle="Currently in progress"/>
         <StatCard title="Compliance Today" value={stats.complianceToday ?? '—'} suffix="%" icon={<TrendingUp size={20} className="text-emerald-600"/>} iconBg="bg-emerald-50" subtitle="Checkpoint scan rate"/>
-        <StatCard title="Open Incidents" value={stats.open_incidents ?? '—'} icon={<AlertTriangle size={20} className="text-amber-600"/>} iconBg="bg-amber-50" subtitle="Pending resolution"/>
-        <StatCard title="Critical Open" value={stats.criticalOpen ?? stats.critical_incidents ?? '—'} icon={<Flame size={20} className="text-red-600"/>} iconBg="bg-red-50" subtitle="Needs immediate attention"/>
+        <StatCard title="Open Incidents" value={stats.openIncidents ?? '—'} icon={<AlertTriangle size={20} className="text-amber-600"/>} iconBg="bg-amber-50" subtitle="Pending resolution"/>
+        <StatCard title="Critical Open" value={stats.criticalOpen ?? '—'} icon={<Flame size={20} className="text-red-600"/>} iconBg="bg-red-50" subtitle="Needs immediate attention"/>
       </section>
 
       {/* ── Smart Insights (AI-style analytics for security manager) ─────── */}
